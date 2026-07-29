@@ -172,7 +172,10 @@ namespace AAXClean.FrameFilters.Audio
 			//Only samples that are genuinely independent are listed; a first sample that is not
 			//an entry point is deliberately NOT added (decoders begin decoding at sample 1
 			//regardless, and listing it would falsely label a dependent frame as sync).
-			if (SyncSamples.Count > 0)
+			//When every sample is sync (e.g. AAC-LC from a fragmented source whose sample flags
+			//mark all frames independent), the box is omitted: an absent stss already means
+			//"all samples are sync" per ISO/IEC 14496-12, and a full enumeration is pure bloat.
+			if (SyncSamples.Count > 0 && SyncSamples.Count < AudioSampleSizes.Count)
 				StssBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl).SampleNumbers.AddRange(SyncSamples);
 
 			IStszBox stsz = StszBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl, AudioSampleSizes);
