@@ -29,6 +29,11 @@ namespace AAXClean.FrameFilters.Audio
 		//Since we're only working with audio files, no frame will ever be larger than ushort.MaxValue.
 		//Use shorts to save memory.
 		private readonly List<ushort> AudioSampleSizes = new();
+		//USAC (xHE-AAC) only: 1-based numbers of samples that begin with usacIndependencyFlag set.
+		//ISO/IEC 23003-3 § H.1 requires enumerating them in an stss box; without it, seeking
+		//demuxers that trust the sample table (notably Apple's) decode from invalid entry points.
+		private readonly List<uint> SyncSamples = new();
+		private readonly bool CollectSyncSamples;
 		private readonly List<int> TextSampleSizes = new();
 		private readonly object lockObj = new();
 		private uint CurrentFrameDuration;
@@ -50,6 +55,8 @@ namespace AAXClean.FrameFilters.Audio
 
 			AudioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
 				?? throw new InvalidDataException($"Audio track's stsd box does not contain an {nameof(AudioSampleEntry)}");
+
+			CollectSyncSamples = IsUsac(AudioSampleEntry);
 
 			ftyp.Save(OutputFile);
 			mdatStart = OutputFile.Position;
@@ -82,8 +89,15 @@ namespace AAXClean.FrameFilters.Audio
 				throw new NotSupportedException($"Only supports maximum of 2-channel audio. (Channels={asc.ChannelConfiguration})");
 			AudioSampleEntry.ChannelCount = (ushort)asc.ChannelConfiguration;
 
+			//The stream is being re-encoded with a new codec; the source's object type no longer applies.
+			CollectSyncSamples = IsUsac(AudioSampleEntry);
+
 			SetTimeScale((uint)asc.SamplingFrequency);
 		}
+
+		//USAC is AudioObjectType 42 per ISO/IEC 14496-3.
+		private static bool IsUsac(AudioSampleEntry audioSampleEntry)
+			=> audioSampleEntry.Esds?.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 42;
 
 		private void SetTimeScale(uint timeScale)
 		{
@@ -150,6 +164,17 @@ namespace AAXClean.FrameFilters.Audio
 			Stts.Samples.Add(new SttsBox.SampleEntry(FrameDurationCount, CurrentFrameDuration));
 			FrameDurationCount = 0;
 			Debug.Assert(AudioSampleSizes.Count == Stts.Samples.Sum(s => s.FrameCount));
+
+			if (CollectSyncSamples && AudioSampleSizes.Count > 0)
+			{
+				//The first sample is always a valid starting point, but the source's first
+				//frame does not necessarily have usacIndependencyFlag set.
+				if (SyncSamples.Count == 0 || SyncSamples[0] != 1)
+					SyncSamples.Insert(0, 1);
+
+				StssBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl).SampleNumbers.AddRange(SyncSamples);
+			}
+
 			IStszBox stsz = StszBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl, AudioSampleSizes);
 
 			IChunkOffsets.Create(Moov.AudioTrack.Mdia.Minf.Stbl, AudioChunks);
@@ -327,6 +352,11 @@ namespace AAXClean.FrameFilters.Audio
 					CurrentChunk++;
 				}
 
+				//In a USAC access unit the first bit is usacIndependencyFlag; frames with it set
+				//are the stream's valid decode entry points (sample numbers are 1-based).
+				if (CollectSyncSamples && !frame.IsEmpty && (frame[0] & 0x80) != 0)
+					SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
+
 				AudioSampleSizes.Add((ushort)frame.Length);
 
 				if (CurrentFrameDuration == 0)
@@ -372,12 +402,17 @@ namespace AAXClean.FrameFilters.Audio
 			StscBox a2 = moov.AudioTrack.Mdia.Minf.Stbl.Stsc;
 			IStszBox? a3 = moov.AudioTrack.Mdia.Minf.Stbl.Stsz;
 			IChunkOffsets a4 = moov.AudioTrack.Mdia.Minf.Stbl.COBox;
+			//A source stss enumerates the source's sample numbers, which are meaningless in the
+			//new file. Remove it from the blank moov; Close() writes a freshly derived one.
+			StssBox? a5 = moov.AudioTrack.Mdia.Minf.Stbl.Stss;
 
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a1);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a2);
 			if (a3 is not null)
 				moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a3);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a4);
+			if (a5 is not null)
+				moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a5);
 
 			MvexBox? mvex = moov.GetChild<MvexBox>();
 			if (mvex is not null)
@@ -395,6 +430,8 @@ namespace AAXClean.FrameFilters.Audio
 			if (a3 is not null)
 				moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a3);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a4);
+			if (a5 is not null)
+				moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a5);
 
 			if (moov.TextTrack is not null)
 			{
@@ -450,6 +487,7 @@ namespace AAXClean.FrameFilters.Audio
 				Close();
 				Stsc?.Samples.Clear();
 				AudioSampleSizes.Clear();
+				SyncSamples.Clear();
 				AudioChunks.Clear();
 				TextChunks.Clear();
 				disposed = true;
