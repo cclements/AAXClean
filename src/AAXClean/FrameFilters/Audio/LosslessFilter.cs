@@ -40,7 +40,7 @@ namespace AAXClean.FrameFilters.Audio
 				newChunk = true;
 			}
 
-			Mp4aWriter.AddFrame(input.FrameData.Span, newChunk, input.SamplesInFrame);
+			Mp4aWriter.AddFrame(input.FrameData.Span, newChunk, input.SamplesInFrame, input.IsSyncSample);
 			lastChunkIndex = chunkIndex;
 			return Task.CompletedTask;
 		}

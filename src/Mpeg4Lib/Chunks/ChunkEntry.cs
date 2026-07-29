@@ -31,4 +31,9 @@ public class ChunkEntry
 	/// </summary>
 	public required uint[] FrameDurations { get; init; }
 	public object? ExtraData { get; init; }
+	/// <summary>
+	/// Per-frame sync sample status (true = independently decodable entry point), or
+	/// null when the source provides no sync sample information for this chunk.
+	/// </summary>
+	public bool[]? SyncFlags { get; init; }
 }

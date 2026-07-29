@@ -109,8 +109,29 @@ public class DashChunkEntryies : IEnumerable<ChunkEntry>
 			FirstSample = startSample,
 			FrameSizes = frameSizes,
 			FrameDurations = frameDurations,
-			ExtraData = extraData
+			ExtraData = extraData,
+			SyncFlags = GetSyncFlags(moofBox.Traf.Tfhd, trun)
 		};
+	}
+
+	private static bool[]? GetSyncFlags(TfhdBox tfhd, TrunBox trun)
+	{
+		//ISO/IEC 14496-12 § 8.8.3.1 sample flags: bit 16 is sample_is_non_sync_sample.
+		const uint SampleIsNonSyncSample = 0x00010000;
+
+		var syncFlags = new bool[trun.Samples.Length];
+		for (int i = 0; i < syncFlags.Length; i++)
+		{
+			uint? flags = trun.Samples[i].SampleFlags
+				?? (i == 0 && trun.HasFirstSampleFlags ? trun.FirstSampleFlags : tfhd.DefaultSampleFlags);
+
+			//Without flags for every sample there is no usable sync information.
+			if (flags is not uint sampleFlags)
+				return null;
+
+			syncFlags[i] = (sampleFlags & SampleIsNonSyncSample) == 0;
+		}
+		return syncFlags;
 	}
 
 	private void SkipToFirstMoof(out MoofBox firstMoof, out MdatBox firstMdat, out long firstSample)

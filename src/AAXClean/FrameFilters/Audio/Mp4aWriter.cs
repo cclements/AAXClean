@@ -29,11 +29,15 @@ namespace AAXClean.FrameFilters.Audio
 		//Since we're only working with audio files, no frame will ever be larger than ushort.MaxValue.
 		//Use shorts to save memory.
 		private readonly List<ushort> AudioSampleSizes = new();
-		//USAC (xHE-AAC) only: 1-based numbers of samples that begin with usacIndependencyFlag set.
-		//ISO/IEC 23003-3 § H.1 requires enumerating them in an stss box; without it, seeking
+		//1-based output sample numbers of sync samples, written to an stss box on Close.
+		//For USAC (xHE-AAC) they are derived from the bitstream: ISO/IEC 23003-3 § H.1 requires
+		//enumerating the independently decodable frames in an stss box; without it, seeking
 		//demuxers that trust the sample table (notably Apple's) decode from invalid entry points.
+		//For other codecs they are propagated from the source's sync information (stss or
+		//fragment sample flags) via <see cref="FrameEntry.IsSyncSample"/>, renumbered to this
+		//file's samples so trimmed and split outputs stay correct.
 		private readonly List<uint> SyncSamples = new();
-		private readonly bool CollectSyncSamples;
+		private readonly bool DeriveUsacSyncSamples;
 		private readonly List<int> TextSampleSizes = new();
 		private readonly object lockObj = new();
 		private uint CurrentFrameDuration;
@@ -56,7 +60,7 @@ namespace AAXClean.FrameFilters.Audio
 			AudioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
 				?? throw new InvalidDataException($"Audio track's stsd box does not contain an {nameof(AudioSampleEntry)}");
 
-			CollectSyncSamples = IsUsac(AudioSampleEntry);
+			DeriveUsacSyncSamples = IsUsac(AudioSampleEntry);
 
 			ftyp.Save(OutputFile);
 			mdatStart = OutputFile.Position;
@@ -90,7 +94,7 @@ namespace AAXClean.FrameFilters.Audio
 			AudioSampleEntry.ChannelCount = (ushort)asc.ChannelConfiguration;
 
 			//The stream is being re-encoded with a new codec; the source's object type no longer applies.
-			CollectSyncSamples = IsUsac(AudioSampleEntry);
+			DeriveUsacSyncSamples = IsUsac(AudioSampleEntry);
 
 			SetTimeScale((uint)asc.SamplingFrequency);
 		}
@@ -165,15 +169,11 @@ namespace AAXClean.FrameFilters.Audio
 			FrameDurationCount = 0;
 			Debug.Assert(AudioSampleSizes.Count == Stts.Samples.Sum(s => s.FrameCount));
 
-			if (CollectSyncSamples && AudioSampleSizes.Count > 0)
-			{
-				//The first sample is always a valid starting point, but the source's first
-				//frame does not necessarily have usacIndependencyFlag set.
-				if (SyncSamples.Count == 0 || SyncSamples[0] != 1)
-					SyncSamples.Insert(0, 1);
-
+			//Only samples that are genuinely independent are listed; a first sample that is not
+			//an entry point is deliberately NOT added (decoders begin decoding at sample 1
+			//regardless, and listing it would falsely label a dependent frame as sync).
+			if (SyncSamples.Count > 0)
 				StssBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl).SampleNumbers.AddRange(SyncSamples);
-			}
 
 			IStszBox stsz = StszBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl, AudioSampleSizes);
 
@@ -333,6 +333,9 @@ namespace AAXClean.FrameFilters.Audio
 		}
 
 		public void AddFrame(Span<byte> frame, bool newChunk, uint frameDelta)
+			=> AddFrame(frame, newChunk, frameDelta, sourceIsSync: null);
+
+		public void AddFrame(Span<byte> frame, bool newChunk, uint frameDelta, bool? sourceIsSync)
 		{
 			lock (lockObj)
 			{
@@ -352,10 +355,19 @@ namespace AAXClean.FrameFilters.Audio
 					CurrentChunk++;
 				}
 
-				//In a USAC access unit the first bit is usacIndependencyFlag; frames with it set
-				//are the stream's valid decode entry points (sample numbers are 1-based).
-				if (CollectSyncSamples && !frame.IsEmpty && (frame[0] & 0x80) != 0)
+				if (DeriveUsacSyncSamples)
+				{
+					//In a USAC access unit the first bit is usacIndependencyFlag; frames with it
+					//set are the stream's valid decode entry points (sample numbers are 1-based).
+					//The bitstream is the ground truth for USAC: source tables may be absent or
+					//wrong (the very defect this exists to repair), so sourceIsSync is ignored.
+					if (!frame.IsEmpty && (frame[0] & 0x80) != 0)
+						SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
+				}
+				else if (sourceIsSync == true)
+				{
 					SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
+				}
 
 				AudioSampleSizes.Add((ushort)frame.Length);
 
