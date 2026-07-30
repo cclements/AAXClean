@@ -98,13 +98,14 @@ internal class ChunkReader : IChunkReader
 		}
 	}
 
-	protected virtual FrameEntry CreateFrameEntry(ChunkEntry chunk, int frameInChunk, uint frameDelta, Memory<byte> frameData)
+	protected virtual FrameEntry CreateFrameEntry(ChunkEntry chunk, int frameInChunk, uint frameDelta, long startSample, Memory<byte> frameData)
 		=> new()
 		{
 			Chunk = chunk,
 			SamplesInFrame = frameDelta,
 			FrameData = frameData,
-			IsSyncSample = chunk.SyncFlags?[frameInChunk]
+			IsSyncSample = chunk.SyncFlags?[frameInChunk],
+			StartSample = startSample
 		};
 
 	private async Task DispatchChunk(ChunkEntry chunk, Memory<byte> chunkData, CancellationToken token)
@@ -130,7 +131,7 @@ internal class ChunkReader : IChunkReader
 			OnProgressReport(sampleIndex, trackEntry.Timescale);
 
 			var frameData = chunkData.Slice(start, chunk.FrameSizes[f]);
-			var frameEntry = CreateFrameEntry(chunk, f, frameDelta, frameData);
+			var frameEntry = CreateFrameEntry(chunk, f, frameDelta, sampleIndex, frameData);
 			token.ThrowIfCancellationRequested();
 			await trackEntry.FirstFilter.AddInputAsync(frameEntry);
 		}

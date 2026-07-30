@@ -93,6 +93,18 @@ namespace AAXClean.FrameFilters.Audio
 			SetTimeScale((uint)asc.SamplingFrequency);
 		}
 
+		private (long mediaTime, long presentedSamples)? EditList;
+
+		/// <summary>
+		/// Present exactly <paramref name="presentedSamples"/> media samples starting
+		/// <paramref name="mediaTime"/> samples into the media (both in media timescale units),
+		/// via an edit list written on Close. Used by chapter splitting so a part can carry
+		/// preceding sync-frame preroll and a trailing partial frame while playing back exactly
+		/// the chapter's samples.
+		/// </summary>
+		public void SetEditList(long mediaTime, long presentedSamples)
+			=> EditList = (mediaTime, presentedSamples);
+
 		private void SetTimeScale(uint timeScale)
 		{
 			Debug.Assert(timeScale <= ushort.MaxValue);
@@ -178,6 +190,27 @@ namespace AAXClean.FrameFilters.Audio
 			}
 
 			SetDuration((ulong)Stts.Samples.Sum(s => (decimal)s.FrameCount * s.FrameDelta));
+
+			if (EditList is (long mediaTime, long presentedSamples))
+			{
+				//The presentation cannot exceed the media actually written.
+				long mediaDuration = (long)Moov.AudioTrack.Mdia.Mdhd.Duration;
+				mediaTime = Math.Min(mediaTime, mediaDuration);
+				presentedSamples = Math.Min(presentedSamples, mediaDuration - mediaTime);
+
+				//segment_duration is in movie (mvhd) timescale; media_time in media (mdhd) timescale.
+				ulong segmentDuration = (ulong)((decimal)presentedSamples * Moov.Mvhd.Timescale / Moov.AudioTrack.Mdia.Mdhd.Timescale);
+
+				EdtsBox edts = Moov.AudioTrack.Edts ?? EdtsBox.CreateBlank(Moov.AudioTrack);
+				ElstBox elst = edts.Elst ?? ElstBox.CreateBlank(edts);
+				elst.Entries.Clear();
+				elst.Entries.Add(new ElstBox.EditEntry(segmentDuration, mediaTime));
+				elst.UpdateVersion();
+
+				//With an edit list, the track and movie durations are the presented duration.
+				Moov.AudioTrack.Tkhd.Duration = segmentDuration;
+				Moov.Mvhd.Duration = segmentDuration;
+			}
 
 			(uint maxBitRate, uint avgBitrate)
 				= CalculateBitrate(
@@ -400,6 +433,8 @@ namespace AAXClean.FrameFilters.Audio
 			//A source stss enumerates the source's sample numbers, which are meaningless in the
 			//new file. Remove it from the blank moov; Close() writes a freshly derived one.
 			StssBox? a5 = moov.AudioTrack.Mdia.Minf.Stbl.Stss;
+			//Likewise a source edit list describes the source's presentation, not this file's.
+			EdtsBox? a6 = moov.AudioTrack.Edts;
 
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a1);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a2);
@@ -408,6 +443,8 @@ namespace AAXClean.FrameFilters.Audio
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a4);
 			if (a5 is not null)
 				moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a5);
+			if (a6 is not null)
+				moov.AudioTrack.Children.Remove(a6);
 
 			MvexBox? mvex = moov.GetChild<MvexBox>();
 			if (mvex is not null)
@@ -427,6 +464,8 @@ namespace AAXClean.FrameFilters.Audio
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a4);
 			if (a5 is not null)
 				moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a5);
+			if (a6 is not null)
+				moov.AudioTrack.Children.Add(a6);
 
 			if (moov.TextTrack is not null)
 			{
