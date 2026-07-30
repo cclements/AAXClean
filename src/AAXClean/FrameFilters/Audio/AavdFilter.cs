@@ -9,7 +9,8 @@ internal class AavdFilter : AacValidateFilter
 	private readonly Aes Aes;
 	private readonly byte[] IV;
 
-	public AavdFilter(byte[] key, byte[] iv)
+	public AavdFilter(byte[] key, byte[] iv, bool audioIsUsac = false)
+		: base(audioIsUsac)
 	{
 		if (key is null || key.Length != AES_BLOCK_SIZE)
 			throw new ArgumentException($"{nameof(key)} must be {AES_BLOCK_SIZE} bytes long.");

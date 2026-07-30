@@ -30,14 +30,13 @@ namespace AAXClean.FrameFilters.Audio
 		//Use shorts to save memory.
 		private readonly List<ushort> AudioSampleSizes = new();
 		//1-based output sample numbers of sync samples, written to an stss box on Close.
-		//For USAC (xHE-AAC) they are derived from the bitstream: ISO/IEC 23003-3 § H.1 requires
-		//enumerating the independently decodable frames in an stss box; without it, seeking
-		//demuxers that trust the sample table (notably Apple's) decode from invalid entry points.
-		//For other codecs they are propagated from the source's sync information (stss or
-		//fragment sample flags) via <see cref="FrameEntry.IsSyncSample"/>, renumbered to this
+		//ISO/IEC 23003-3 § H.1 requires enumerating USAC's independently decodable frames in
+		//an stss box; without it, seeking demuxers that trust the sample table (notably
+		//Apple's) decode from invalid entry points. The writer is codec-unaware: sync status
+		//arrives per frame via AddFrame (from <see cref="FrameEntry.IsSyncSample"/>, made
+		//accurate upstream by the chunk readers and audio filters) and is renumbered to this
 		//file's samples so trimmed and split outputs stay correct.
 		private readonly List<uint> SyncSamples = new();
-		private readonly bool DeriveUsacSyncSamples;
 		private readonly List<int> TextSampleSizes = new();
 		private readonly object lockObj = new();
 		private uint CurrentFrameDuration;
@@ -59,8 +58,6 @@ namespace AAXClean.FrameFilters.Audio
 
 			AudioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
 				?? throw new InvalidDataException($"Audio track's stsd box does not contain an {nameof(AudioSampleEntry)}");
-
-			DeriveUsacSyncSamples = IsUsac(AudioSampleEntry);
 
 			ftyp.Save(OutputFile);
 			mdatStart = OutputFile.Position;
@@ -93,15 +90,8 @@ namespace AAXClean.FrameFilters.Audio
 				throw new NotSupportedException($"Only supports maximum of 2-channel audio. (Channels={asc.ChannelConfiguration})");
 			AudioSampleEntry.ChannelCount = (ushort)asc.ChannelConfiguration;
 
-			//The stream is being re-encoded with a new codec; the source's object type no longer applies.
-			DeriveUsacSyncSamples = IsUsac(AudioSampleEntry);
-
 			SetTimeScale((uint)asc.SamplingFrequency);
 		}
-
-		//USAC is AudioObjectType 42 per ISO/IEC 14496-3.
-		private static bool IsUsac(AudioSampleEntry audioSampleEntry)
-			=> audioSampleEntry.Esds?.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 42;
 
 		private void SetTimeScale(uint timeScale)
 		{
@@ -358,19 +348,9 @@ namespace AAXClean.FrameFilters.Audio
 					CurrentChunk++;
 				}
 
-				if (DeriveUsacSyncSamples)
-				{
-					//In a USAC access unit the first bit is usacIndependencyFlag; frames with it
-					//set are the stream's valid decode entry points (sample numbers are 1-based).
-					//The bitstream is the ground truth for USAC: source tables may be absent or
-					//wrong (the very defect this exists to repair), so sourceIsSync is ignored.
-					if (!frame.IsEmpty && (frame[0] & 0x80) != 0)
-						SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
-				}
-				else if (sourceIsSync == true)
-				{
+				//Sample numbers are 1-based.
+				if (sourceIsSync == true)
 					SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
-				}
 
 				AudioSampleSizes.Add((ushort)frame.Length);
 

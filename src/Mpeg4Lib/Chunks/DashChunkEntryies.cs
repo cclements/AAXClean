@@ -119,19 +119,49 @@ public class DashChunkEntryies : IEnumerable<ChunkEntry>
 		//ISO/IEC 14496-12 § 8.8.3.1 sample flags: bit 16 is sample_is_non_sync_sample.
 		const uint SampleIsNonSyncSample = 0x00010000;
 
-		var syncFlags = new bool[trun.Samples.Length];
-		for (int i = 0; i < syncFlags.Length; i++)
+		if (trun.sample_flags_present)
 		{
-			uint? flags = trun.Samples[i].SampleFlags
-				?? (i == 0 && trun.HasFirstSampleFlags ? trun.FirstSampleFlags : tfhd.DefaultSampleFlags);
+			//Per-sample flags override any defaults, and per § 8.8.8 first-sample-flags
+			//shall not be present alongside them.
+			var syncFlags = new bool[trun.Samples.Length];
+			for (int i = 0; i < syncFlags.Length; i++)
+			{
+				uint sampleFlags = trun.Samples[i].SampleFlags
+					?? throw new InvalidDataException($"The {nameof(TrunBox)} sample info at index {i} doesn't contain sample flags.");
 
-			//Without flags for every sample there is no usable sync information.
-			if (flags is not uint sampleFlags)
-				return null;
-
-			syncFlags[i] = (sampleFlags & SampleIsNonSyncSample) == 0;
+				syncFlags[i] = (sampleFlags & SampleIsNonSyncSample) == 0;
+			}
+			return syncFlags;
 		}
-		return syncFlags;
+
+		if (trun.HasFirstSampleFlags)
+		{
+			//Per § 8.8.8, first-sample-flags overrides the default flags for the first
+			//sample only; the remaining samples use the fragment default, or are treated
+			//as non-sync when no default is present.
+			var syncFlags = new bool[trun.Samples.Length];
+			syncFlags[0] = (trun.FirstSampleFlags & SampleIsNonSyncSample) == 0;
+			if (tfhd.DefaultSampleFlags is uint restFlags && (restFlags & SampleIsNonSyncSample) == 0)
+			{
+				for (int i = 1; i < syncFlags.Length; i++)
+					syncFlags[i] = true;
+			}
+			return syncFlags;
+		}
+
+		if (tfhd.DefaultSampleFlags is uint defaultFlags)
+		{
+			bool sync = (defaultFlags & SampleIsNonSyncSample) == 0;
+			var syncFlags = new bool[trun.Samples.Length];
+			for (int i = 0; i < syncFlags.Length; i++)
+				syncFlags[i] = sync;
+			return syncFlags;
+		}
+
+		//No sample flags are present anywhere in the fragment, so sync status is unknown.
+		//TODO: add Track Extends Box (trex) support to get default sample flags from the
+		//track definition.
+		return null;
 	}
 
 	private void SkipToFirstMoof(out MoofBox firstMoof, out MdatBox firstMdat, out long firstSample)

@@ -1,7 +1,10 @@
 using Mpeg4Lib.Util;
+using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace Mpeg4Lib.Boxes;
 
@@ -37,9 +40,14 @@ public class StssBox : FullBox
 		uint entryCount = file.ReadUInt32BE();
 		Debug.Assert(entryCount <= int.MaxValue);
 		SampleNumbers = new List<uint>((int)entryCount);
+		CollectionsMarshal.SetCount(SampleNumbers, (int)entryCount);
+		Span<uint> sampleNumbers = CollectionsMarshal.AsSpan(SampleNumbers);
 
-		for (uint i = 0; i < entryCount; i++)
-			SampleNumbers.Add(file.ReadUInt32BE());
+		file.ReadExactly(MemoryMarshal.AsBytes(sampleNumbers));
+		if (BitConverter.IsLittleEndian)
+		{
+			BinaryPrimitives.ReverseEndianness(sampleNumbers, sampleNumbers);
+		}
 	}
 
 	protected override void Render(Stream file)

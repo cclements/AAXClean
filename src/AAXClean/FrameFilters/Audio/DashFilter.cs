@@ -8,7 +8,8 @@ internal class DashFilter : AacValidateFilter
 	public byte[]? Key { get; }
 	private AesCtr? AesCtr { get; }
 
-	public DashFilter(byte[]? key)
+	public DashFilter(byte[]? key, bool audioIsUsac = false)
+		: base(audioIsUsac)
 	{
 		Key = key;
 		AesCtr = key is null ? null : new AesCtr(key);

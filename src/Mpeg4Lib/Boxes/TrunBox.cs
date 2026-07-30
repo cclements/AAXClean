@@ -13,7 +13,7 @@ public class TrunBox : FullBox
 	public bool HasFirstSampleFlags => (Flags & 4) == 4;
 	public bool sample_duration_present => (Flags & 0x100) == 0x100;
 	public bool sample_size_present => (Flags & 0x200) == 0x200;
-	private bool sample_flags_present => (Flags & 0x400) == 0x400;
+	public bool sample_flags_present => (Flags & 0x400) == 0x400;
 	private bool sample_composition_time_offsets_present => (Flags & 0x800) == 0x800;
 
 	private int SampleInfoSize =>

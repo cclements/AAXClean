@@ -50,7 +50,7 @@ namespace AAXClean
 
 		public override FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
 		{
-			return Key is not null && IV is not null ? new AavdFilter(Key, IV)
+			return Key is not null && IV is not null ? new AavdFilter(Key, IV, AudioTrackIsUsac)
 				: throw new InvalidOperationException($"This instance of {nameof(AaxFile)} does not have a decryption key set.");
 		}
 
