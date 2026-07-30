@@ -10,6 +10,7 @@ public class StblBox : Box
 	}
 	public StsdBox Stsd => GetChildOrThrow<StsdBox>();
 	public SttsBox Stts => GetChildOrThrow<SttsBox>();
+	public StssBox? Stss => GetChild<StssBox>();
 	public IChunkOffsets COBox => GetChild<StcoBox>() ?? (IChunkOffsets)GetChildOrThrow<Co64Box>();
 	public IStszBox? Stsz => GetChild<StszBox>() ?? (GetChild<Stz2Box>() as IStszBox);
 	public StscBox Stsc => GetChildOrThrow<StscBox>();

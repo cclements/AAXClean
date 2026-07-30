@@ -36,6 +36,7 @@ namespace Mpeg4Lib.Boxes
 				"btrt" => new BtrtBox(file, header, parent),
 				"adrm" => new AdrmBox(file, header, parent),
 				"stts" => new SttsBox(file, header, parent),
+				"stss" => new StssBox(file, header, parent),
 				"stsc" => new StscBox(file, header, parent),
 				"stsz" => new StszBox(file, header, parent),
 				"stz2" => new Stz2Box(file, header, parent),

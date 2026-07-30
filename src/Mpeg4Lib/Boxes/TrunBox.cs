@@ -5,15 +5,15 @@ namespace Mpeg4Lib.Boxes;
 
 public class TrunBox : FullBox
 {
-	public override long RenderSize => base.RenderSize + 4 + (data_offset_present ? 4 : 0) + (first_sample_flags_present ? 4 : 0) + SampleInfoSize * Samples.Length;
+	public override long RenderSize => base.RenderSize + 4 + (data_offset_present ? 4 : 0) + (HasFirstSampleFlags ? 4 : 0) + SampleInfoSize * Samples.Length;
 	public int DataOffset { get; }
 	public uint FirstSampleFlags { get; }
 	public SampleInfo[] Samples { get; }
 	private bool data_offset_present => (Flags & 1) == 1;
-	private bool first_sample_flags_present => (Flags & 4) == 4;
+	public bool HasFirstSampleFlags => (Flags & 4) == 4;
 	public bool sample_duration_present => (Flags & 0x100) == 0x100;
 	public bool sample_size_present => (Flags & 0x200) == 0x200;
-	private bool sample_flags_present => (Flags & 0x400) == 0x400;
+	public bool sample_flags_present => (Flags & 0x400) == 0x400;
 	private bool sample_composition_time_offsets_present => (Flags & 0x800) == 0x800;
 
 	private int SampleInfoSize =>
@@ -27,7 +27,7 @@ public class TrunBox : FullBox
 		uint sampleCount = file.ReadUInt32BE();
 		if (data_offset_present)
 			DataOffset = file.ReadInt32BE();
-		if (first_sample_flags_present)
+		if (HasFirstSampleFlags)
 			FirstSampleFlags = file.ReadUInt32BE();
 
 		Samples = new SampleInfo[sampleCount];
@@ -49,7 +49,7 @@ public class TrunBox : FullBox
 		file.WriteInt32BE(Samples.Length);
 		if (data_offset_present)
 			file.WriteInt32BE(DataOffset);
-		if (first_sample_flags_present)
+		if (HasFirstSampleFlags)
 			file.WriteUInt32BE(FirstSampleFlags);
 
 		for (int i = 0; i < Samples.Length; i++)

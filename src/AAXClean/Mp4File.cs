@@ -72,7 +72,12 @@ namespace AAXClean
 			: this(File.Open(fileName, FileMode.Open, access, share)) { }
 
 		public virtual FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
-			=> new AacValidateFilter();
+			=> new AacValidateFilter(AudioTrackIsUsac);
+
+		//USAC is AudioObjectType 42 per ISO/IEC 14496-3.
+		internal bool AudioTrackIsUsac
+			=> Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry?
+				.Esds?.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 42;
 
 		public static Mp4Operation RelocateMoovAsync(string mp4FilePath)
 		{

@@ -29,6 +29,14 @@ namespace AAXClean.FrameFilters.Audio
 		//Since we're only working with audio files, no frame will ever be larger than ushort.MaxValue.
 		//Use shorts to save memory.
 		private readonly List<ushort> AudioSampleSizes = new();
+		//1-based output sample numbers of sync samples, written to an stss box on Close.
+		//ISO/IEC 23003-3 § H.1 requires enumerating USAC's independently decodable frames in
+		//an stss box; without it, seeking demuxers that trust the sample table (notably
+		//Apple's) decode from invalid entry points. The writer is codec-unaware: sync status
+		//arrives per frame via AddFrame (from <see cref="FrameEntry.IsSyncSample"/>, made
+		//accurate upstream by the chunk readers and audio filters) and is renumbered to this
+		//file's samples so trimmed and split outputs stay correct.
+		private readonly List<uint> SyncSamples = new();
 		private readonly List<int> TextSampleSizes = new();
 		private readonly object lockObj = new();
 		private uint CurrentFrameDuration;
@@ -150,6 +158,16 @@ namespace AAXClean.FrameFilters.Audio
 			Stts.Samples.Add(new SttsBox.SampleEntry(FrameDurationCount, CurrentFrameDuration));
 			FrameDurationCount = 0;
 			Debug.Assert(AudioSampleSizes.Count == Stts.Samples.Sum(s => s.FrameCount));
+
+			//Only samples that are genuinely independent are listed; a first sample that is not
+			//an entry point is deliberately NOT added (decoders begin decoding at sample 1
+			//regardless, and listing it would falsely label a dependent frame as sync).
+			//When every sample is sync (e.g. AAC-LC from a fragmented source whose sample flags
+			//mark all frames independent), the box is omitted: an absent stss already means
+			//"all samples are sync" per ISO/IEC 14496-12, and a full enumeration is pure bloat.
+			if (SyncSamples.Count > 0 && SyncSamples.Count < AudioSampleSizes.Count)
+				StssBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl).SampleNumbers.AddRange(SyncSamples);
+
 			IStszBox stsz = StszBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl, AudioSampleSizes);
 
 			IChunkOffsets.Create(Moov.AudioTrack.Mdia.Minf.Stbl, AudioChunks);
@@ -308,6 +326,9 @@ namespace AAXClean.FrameFilters.Audio
 		}
 
 		public void AddFrame(Span<byte> frame, bool newChunk, uint frameDelta)
+			=> AddFrame(frame, newChunk, frameDelta, sourceIsSync: null);
+
+		public void AddFrame(Span<byte> frame, bool newChunk, uint frameDelta, bool? sourceIsSync)
 		{
 			lock (lockObj)
 			{
@@ -326,6 +347,10 @@ namespace AAXClean.FrameFilters.Audio
 					SamplesPerChunk = 0;
 					CurrentChunk++;
 				}
+
+				//Sample numbers are 1-based.
+				if (sourceIsSync == true)
+					SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
 
 				AudioSampleSizes.Add((ushort)frame.Length);
 
@@ -372,12 +397,17 @@ namespace AAXClean.FrameFilters.Audio
 			StscBox a2 = moov.AudioTrack.Mdia.Minf.Stbl.Stsc;
 			IStszBox? a3 = moov.AudioTrack.Mdia.Minf.Stbl.Stsz;
 			IChunkOffsets a4 = moov.AudioTrack.Mdia.Minf.Stbl.COBox;
+			//A source stss enumerates the source's sample numbers, which are meaningless in the
+			//new file. Remove it from the blank moov; Close() writes a freshly derived one.
+			StssBox? a5 = moov.AudioTrack.Mdia.Minf.Stbl.Stss;
 
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a1);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a2);
 			if (a3 is not null)
 				moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a3);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a4);
+			if (a5 is not null)
+				moov.AudioTrack.Mdia.Minf.Stbl.Children.Remove(a5);
 
 			MvexBox? mvex = moov.GetChild<MvexBox>();
 			if (mvex is not null)
@@ -395,6 +425,8 @@ namespace AAXClean.FrameFilters.Audio
 			if (a3 is not null)
 				moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a3);
 			moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a4);
+			if (a5 is not null)
+				moov.AudioTrack.Mdia.Minf.Stbl.Children.Add(a5);
 
 			if (moov.TextTrack is not null)
 			{
@@ -450,6 +482,7 @@ namespace AAXClean.FrameFilters.Audio
 				Close();
 				Stsc?.Samples.Clear();
 				AudioSampleSizes.Clear();
+				SyncSamples.Clear();
 				AudioChunks.Clear();
 				TextChunks.Clear();
 				disposed = true;

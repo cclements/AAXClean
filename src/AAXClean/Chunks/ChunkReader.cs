@@ -103,7 +103,8 @@ internal class ChunkReader : IChunkReader
 		{
 			Chunk = chunk,
 			SamplesInFrame = frameDelta,
-			FrameData = frameData
+			FrameData = frameData,
+			IsSyncSample = chunk.SyncFlags?[frameInChunk]
 		};
 
 	private async Task DispatchChunk(ChunkEntry chunk, Memory<byte> chunkData, CancellationToken token)

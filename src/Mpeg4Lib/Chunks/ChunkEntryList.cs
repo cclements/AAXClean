@@ -16,6 +16,7 @@ public class ChunkEntryList : IReadOnlyCollection<ChunkEntry>
 	private readonly SttsBox Stts;
 	private readonly ChunkFrames[] ChunkFrameTable;
 	private readonly uint TrackId;
+	private readonly HashSet<uint>? SyncSampleNumbers;
 	public int Count { get; }
 
 	public ChunkEntryList(TrakBox track)
@@ -28,6 +29,9 @@ public class ChunkEntryList : IReadOnlyCollection<ChunkEntry>
 		Count = (int)coBox.EntryCount;
 		Stts = track.Mdia.Minf.Stbl.Stts;
 		ChunkFrameTable = track.Mdia.Minf.Stbl.Stsc.CalculateChunkFrameTable(coBox.EntryCount);
+		//A present stss identifies the track's sync samples; absent means every sample is sync
+		//(ISO/IEC 14496-12), which callers see as SyncFlags = null (no explicit information).
+		SyncSampleNumbers = track.Mdia.Minf.Stbl.Stss?.SampleNumbers.ToHashSet();
 	}
 
 	public IEnumerator<ChunkEntry> GetEnumerator()
@@ -47,6 +51,14 @@ public class ChunkEntryList : IReadOnlyCollection<ChunkEntry>
 
 			var frameDurations = Stts.EnumerateFrameDeltas(chunkFrames.FirstFrameIndex).Take(frameSizes.Length).ToArray();
 
+			bool[]? syncFlags = null;
+			if (SyncSampleNumbers is not null)
+			{
+				syncFlags = new bool[frameSizes.Length];
+				for (int i = 0; i < syncFlags.Length; i++)
+					syncFlags[i] = SyncSampleNumbers.Contains((uint)(chunkFrames.FirstFrameIndex + i + 1));
+			}
+
 			var entry = new ChunkEntry
 			{
 				TrackId = TrackId,
@@ -55,7 +67,8 @@ public class ChunkEntryList : IReadOnlyCollection<ChunkEntry>
 				ChunkSize = totalChunkSize,
 				ChunkOffset = chunkOffset,
 				FirstSample = startSample,
-				FrameDurations = frameDurations
+				FrameDurations = frameDurations,
+				SyncFlags = syncFlags
 			};
 
 			startSample += entry.FrameDurations.Sum(d => d);

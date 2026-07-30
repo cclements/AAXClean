@@ -97,7 +97,7 @@ public class DashFile : Mp4File
 	{
 		return Key is null && Tenc is not null
 			? throw new InvalidOperationException($"This instance of {nameof(DashFile)} does not have a decryption key set.")
-			: new DashFilter(Key);
+			: new DashFilter(Key, AudioTrackIsUsac);
 	}
 
 	public void SetDecryptionKey(byte[] keyId, byte[] decryptionKey)
