@@ -46,6 +46,6 @@ internal class DashChunkReader : ChunkReader
 		long minimumSample = (long)(StartTime.TotalSeconds * singleTrack.Timescale);
 		long maximumSample = (long)(EndTime.TotalSeconds * singleTrack.Timescale);
 
-		return new DashChunkEntryies(InputStream, singleTrack.TrackId, Dash.Sidx, Dash.FirstMoof, Dash.FirstMdat, minimumSample, maximumSample);
+		return new DashChunkEntries(InputStream, singleTrack.TrackId, Dash.Sidx, Dash.FirstMoof, Dash.FirstMdat, minimumSample, maximumSample);
 	}
 }

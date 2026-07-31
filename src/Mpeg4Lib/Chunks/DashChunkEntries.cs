@@ -8,7 +8,7 @@ using System.Linq;
 
 namespace Mpeg4Lib.Chunks;
 
-public class DashChunkEntryies : IEnumerable<ChunkEntry>
+public class DashChunkEntries : IEnumerable<ChunkEntry>
 {
 	private Stream InputStream { get; }
 	private uint TrackId { get; }
@@ -18,7 +18,7 @@ public class DashChunkEntryies : IEnumerable<ChunkEntry>
 	private long MinimumSample { get; }
 	private long MaximumSample { get; }
 
-	public DashChunkEntryies(Stream inputStream, uint trakId, SidxBox sidx, MoofBox firstMoof, MdatBox firstMdat, long minimumSample, long maximumSample)
+	public DashChunkEntries(Stream inputStream, uint trakId, SidxBox sidx, MoofBox firstMoof, MdatBox firstMdat, long minimumSample, long maximumSample)
 	{
 		InputStream = inputStream;
 		TrackId = trakId;
