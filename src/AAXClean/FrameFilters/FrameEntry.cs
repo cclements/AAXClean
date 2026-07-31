@@ -16,4 +16,9 @@ public class FrameEntry
 	/// the decrypted frame data is available.
 	/// </summary>
 	public bool? IsSyncSample { get; set; }
+	/// <summary>
+	/// Exact start position of this frame on the source media timeline, in media
+	/// (mdhd) timescale units, or null when unknown (e.g. flushed entries).
+	/// </summary>
+	public long? StartSample { get; init; }
 }

@@ -20,9 +20,9 @@ internal class DashChunkReader : ChunkReader
 		Dash = dash;
 	}
 
-	protected override FrameEntry CreateFrameEntry(ChunkEntry chunk, int frameInChunk, uint frameDelta, Memory<byte> frameData)
+	protected override FrameEntry CreateFrameEntry(ChunkEntry chunk, int frameInChunk, uint frameDelta, long startSample, Memory<byte> frameData)
 	{
-		var entry = base.CreateFrameEntry(chunk, frameInChunk, frameDelta, frameData);
+		var entry = base.CreateFrameEntry(chunk, frameInChunk, frameDelta, startSample, frameData);
 		if (chunk.ExtraData is byte[][] IVs)
 		{
 			entry.ExtraData = IVs.Length > frameInChunk ? IVs[frameInChunk]

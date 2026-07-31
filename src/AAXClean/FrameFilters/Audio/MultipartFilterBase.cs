@@ -18,6 +18,33 @@ namespace AAXClean.FrameFilters.Audio
 		private long lastChunkIndex = -1;
 		private long currentSample;
 
+		//Frames since (and including) the most recent sync frame, oldest first, with each
+		//frame's exact media start position. Bounded: sync frames occur about once per second
+		//in every supported codec, and for codecs where every frame is sync the queue holds
+		//exactly one frame.
+		private readonly Queue<(TInput frame, long start)> prerollQueue = new();
+		private const int MaxPrerollFrames = 4096;
+
+		/// <summary>
+		/// When true, each new part begins at the most recent sync frame at or before the
+		/// chapter boundary instead of at the boundary frame itself, so the part starts with
+		/// an independently decodable frame. <see cref="OnPartOpened"/> reports the resulting
+		/// presentation offset so the writer can trim playback to the exact chapter window.
+		/// </summary>
+		protected virtual bool StartPartAtSyncFrame => false;
+
+		/// <summary>Whether this frame is a valid decode entry point. Default: all frames are.</summary>
+		protected virtual bool IsSyncFrame(TInput frame) => frame.IsSyncSample ?? true;
+
+		/// <summary>
+		/// Called after <see cref="CreateNewWriter"/> with the exact presentation window of the
+		/// new part: <paramref name="editMediaTime"/> is the offset (in media timescale units)
+		/// from the part's first written frame to the chapter start, and
+		/// <paramref name="presentedSamples"/> is the chapter's exact duration in media
+		/// timescale units.
+		/// </summary>
+		protected virtual void OnPartOpened(long editMediaTime, long presentedSamples) { }
+
 		public MultipartFilterBase(ChapterInfo splitChapters, SampleRate inputSampleRate, bool inputStereo)
 		{
 			if (splitChapters is null || splitChapters.Count == 0)
@@ -45,16 +72,40 @@ namespace AAXClean.FrameFilters.Audio
 			{
 				//This is the final flushed entry
 				WriteFrameToFile(input, false);
+				return Task.CompletedTask;
 			}
-			else if (currentSample > endSample)
+
+			//Exact media position when the reader provides it; the accumulator otherwise.
+			currentSample = input.StartSample ?? currentSample;
+
+			if (currentSample > endSample)
 			{
 				CloseCurrentWriter();
 
 				if (GetNextChapter())
 				{
 					CreateNewWriter(TCallback.Create(splitChapters.Current));
-					WriteFrameToFile(input, true);
-					lastChunkIndex = input.Chunk.ChunkIndex;
+
+					//The preroll queue holds the frames since (and including) the most
+					//recent sync frame, all of which start at or before the chapter
+					//boundary. Starting the part there gives decoders a valid entry
+					//point; the current frame follows them.
+					var partFrames = new List<(TInput frame, long start)>();
+					if (StartPartAtSyncFrame)
+						partFrames.AddRange(prerollQueue);
+					partFrames.Add((input, currentSample));
+
+					OnPartOpened(editMediaTime: Math.Max(0, startSample - partFrames[0].start),
+						presentedSamples: endSample - startSample);
+
+					bool first = true;
+					foreach ((TInput frame, long _) in partFrames)
+					{
+						bool newChunk = first || frame.Chunk!.ChunkIndex > lastChunkIndex;
+						lastChunkIndex = frame.Chunk!.ChunkIndex;
+						WriteFrameToFile(frame, newChunk);
+						first = false;
+					}
 				}
 			}
 			else if (currentSample >= startSample)
@@ -66,6 +117,13 @@ namespace AAXClean.FrameFilters.Audio
 				}
 				WriteFrameToFile(input, newChunk);
 			}
+
+			if (IsSyncFrame(input))
+				prerollQueue.Clear();
+			if (prerollQueue.Count == MaxPrerollFrames)
+				prerollQueue.Dequeue();
+			prerollQueue.Enqueue((input, currentSample));
+
 			currentSample += input.SamplesInFrame;
 
 			return Task.CompletedTask;

@@ -23,6 +23,15 @@ namespace AAXClean.FrameFilters.Audio
 			this.newFileCallback = newFileCallback;
 		}
 
+		//Start each part at a decodable frame and trim playback to the exact chapter window.
+		//FrameEntry.IsSyncSample is already accurate here: the chunk readers seed it from
+		//source metadata and AacValidateFilter corrects it from the USAC bitstream, so the
+		//base filter's default sync test needs no override.
+		protected override bool StartPartAtSyncFrame => true;
+
+		protected override void OnPartOpened(long editMediaTime, long presentedSamples)
+			=> Mp4writer?.SetEditList(editMediaTime, presentedSamples);
+
 		protected override void CloseCurrentWriter()
 		{
 			if (!CurrentWriterOpen) return;
