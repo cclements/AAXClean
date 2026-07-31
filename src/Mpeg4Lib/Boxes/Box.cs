@@ -23,16 +23,7 @@ namespace Mpeg4Lib.Boxes
 		}
 		protected abstract void Render(Stream file);
 		public T? GetChild<T>() where T : IBox
-		{
-			IEnumerable<T> children = GetChildren<T>();
-
-			return children.Count() switch
-			{
-				0 => default,
-				1 => children.First(),
-				_ => throw new InvalidOperationException($"{GetType().Name} has {children.Count()} children of type {typeof(T)}. Call {nameof(GetChildren)} instead."),
-			};
-		}
+			=> GetChildren<T>().SingleOrDefault();
 
 		public T GetChildOrThrow<T>() where T : IBox
 			=> GetChild<T>() ?? throw new InvalidDataException($"{Header.Type} does not contain a child of type {typeof(T)}");
