@@ -18,12 +18,7 @@ namespace AAXClean.FrameFilters.Audio
 		private long lastChunkIndex = -1;
 		private long currentSample;
 
-		//Frames since (and including) the most recent sync frame, oldest first, with each
-		//frame's exact media start position. Bounded: sync frames occur about once per second
-		//in every supported codec, and for codecs where every frame is sync the queue holds
-		//exactly one frame.
-		private readonly Queue<(TInput frame, long start)> prerollQueue = new();
-		private const int MaxPrerollFrames = 4096;
+		private readonly SyncPrerollQueue prerollQueue = new();
 
 		/// <summary>
 		/// When true, each new part begins at the most recent sync frame at or before the
@@ -92,7 +87,8 @@ namespace AAXClean.FrameFilters.Audio
 					//point; the current frame follows them.
 					var partFrames = new List<(TInput frame, long start)>();
 					if (StartPartAtSyncFrame)
-						partFrames.AddRange(prerollQueue);
+						foreach ((FrameEntry frame, long start) in prerollQueue.Frames)
+							partFrames.Add(((TInput)frame, start));
 					partFrames.Add((input, currentSample));
 
 					OnPartOpened(editMediaTime: Math.Max(0, startSample - partFrames[0].start),
@@ -118,11 +114,7 @@ namespace AAXClean.FrameFilters.Audio
 				WriteFrameToFile(input, newChunk);
 			}
 
-			if (IsSyncFrame(input))
-				prerollQueue.Clear();
-			if (prerollQueue.Count == MaxPrerollFrames)
-				prerollQueue.Dequeue();
-			prerollQueue.Enqueue((input, currentSample));
+			prerollQueue.Push(input, currentSample, IsSyncFrame(input));
 
 			currentSample += input.SamplesInFrame;
 
