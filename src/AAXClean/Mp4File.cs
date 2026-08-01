@@ -121,8 +121,19 @@ namespace AAXClean
 				chapterQueue.AddRange(userChapters);
 			}
 
+			//The requested window in media samples: presentation times mapped through the
+			//input's edit list (same rounding as the multipart path). For an untrimmed
+			//elst-free source this is exactly (0, media duration) and no trimming occurs;
+			//for an elst input with no user chapters it is the input's own window, so a
+			//re-remux round-trips the presentation.
+			uint mdhdTimescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
+			long windowStart = PresentationStartSample + (long)Math.Round(start.TotalSeconds * mdhdTimescale);
+			long windowEnd = end == TimeSpan.MaxValue
+				? PresentationStartSample + PresentedDurationSamples
+				: PresentationStartSample + (long)Math.Round(end.TotalSeconds * mdhdTimescale);
+
 			FrameTransformBase<FrameEntry, FrameEntry> filter1 = GetAudioFrameFilter();
-			LosslessFilter filter2 = new(outputStream, this, chapterQueue);
+			LosslessFilter filter2 = new(outputStream, this, chapterQueue, windowStart, windowEnd);
 			filter1.LinkTo(filter2);
 
 			if (Moov.TextTrack is not null && userChapters is null)
