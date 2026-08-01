@@ -40,13 +40,14 @@ namespace AAXClean.FrameFilters.Audio
 		/// </summary>
 		protected virtual void OnPartOpened(long editMediaTime, long presentedSamples) { }
 
-		public MultipartFilterBase(ChapterInfo splitChapters, SampleRate inputSampleRate, bool inputStereo)
+		public MultipartFilterBase(ChapterInfo splitChapters, SampleRate inputSampleRate, bool inputStereo, long mediaTimeOffset = 0)
 		{
 			if (splitChapters is null || splitChapters.Count == 0)
 				throw new ArgumentException($"{nameof(splitChapters)} must contain at least one chapter.");
 
 			InputSampleRate = inputSampleRate;
 			InputStereo = inputStereo;
+			this.mediaTimeOffset = mediaTimeOffset;
 			startSample = currentSample = timeToSample(splitChapters.StartOffset);
 			this.splitChapters = splitChapters.GetEnumerator();
 		}
@@ -132,7 +133,10 @@ namespace AAXClean.FrameFilters.Audio
 			return true;
 		}
 
-		private long timeToSample(TimeSpan time) => (long)Math.Round(time.TotalSeconds * (int)InputSampleRate);
+		//Chapter offsets are presentation times; frame positions are media times. The offset
+		//is the input edit list's media_time (0 without one).
+		private readonly long mediaTimeOffset;
+		private long timeToSample(TimeSpan time) => (long)Math.Round(time.TotalSeconds * (int)InputSampleRate) + mediaTimeOffset;
 
 		protected override void Dispose(bool disposing)
 		{
