@@ -38,7 +38,7 @@ public class Mpeg4File : IDisposable
 	/// </summary>
 	public long PresentedDurationSamples
 		=> Moov.AudioTrack.Edts?.Elst?.SingleEdit is ElstBox.EditEntry edit
-			? (long)((decimal)edit.SegmentDuration * Moov.AudioTrack.Mdia.Mdhd.Timescale / Moov.Mvhd.Timescale)
+			? (long)Math.Round((decimal)edit.SegmentDuration * Moov.AudioTrack.Mdia.Mdhd.Timescale / Moov.Mvhd.Timescale)
 			: (long)Moov.AudioTrack.Mdia.Mdhd.Duration;
 
 	/// <summary>Presented duration of the audio track (<see cref="PresentedDurationSamples"/> as time).</summary>

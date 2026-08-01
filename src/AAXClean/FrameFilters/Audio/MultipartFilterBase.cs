@@ -17,6 +17,7 @@ namespace AAXClean.FrameFilters.Audio
 		private long endSample = -1;
 		private long lastChunkIndex = -1;
 		private long currentSample;
+		private bool writerOpen;
 
 		private readonly SyncPrerollQueue prerollQueue = new();
 
@@ -77,10 +78,28 @@ namespace AAXClean.FrameFilters.Audio
 			if (currentSample > endSample)
 			{
 				CloseCurrentWriter();
+				writerOpen = false;
 
-				if (GetNextChapter())
+				if (!GetNextChapter())
+				{
+					//No more chapters: nothing past this point is written, and the sentinels
+					//keep both the re-fire and the deferred open below permanently false.
+					startSample = endSample = long.MaxValue;
+				}
+			}
+
+			if (!writerOpen)
+			{
+				//The chapter window may begin after the current frame (the reader dispatches
+				//early: sync-frame lookback, or an edit-list input whose window starts
+				//mid-media). Open the part only at the first frame that overlaps the window,
+				//so its media is the contiguous run from the preroll's sync frame — opening
+				//eagerly would write the sync frame, then drop the pre-window frames after
+				//it, leaving a hole in the part's bitstream.
+				if (currentSample + input.SamplesInFrame > startSample)
 				{
 					CreateNewWriter(TCallback.Create(splitChapters.Current));
+					writerOpen = true;
 
 					//The preroll queue holds the frames since (and including) the most
 					//recent sync frame, all of which start at or before the chapter
