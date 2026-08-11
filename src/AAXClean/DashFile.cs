@@ -79,13 +79,15 @@ public class DashFile : Mp4File
 		{
 			if (sinf.SchemeType?.Type != SchmBox.SchemeType.Cenc)
 				throw new NotSupportedException($"Only {nameof(SchmBox.SchemeType.Cenc)} dash files are currently supported.");
-			Tenc = sinf.SchemeInformation?.TrackEncryption;
-			audioSampleEntry.Children.Remove(sinf);
-			audioSampleEntry.Header.ChangeAtomName(sinf.OriginalFormat.DataFormat);
-		}
 
-		foreach (var pssh in Moov.GetChildren<PsshBox>().ToArray())
-			Moov.Children.Remove(pssh);
+			if (TopLevelBoxes.Any(ContainsCencSampleGroup))
+				throw new NotSupportedException(
+					"CENC sample-group protection overrides (seig) are not supported.");
+
+			Tenc = sinf.SchemeInformation?.TrackEncryption
+				?? throw new InvalidDataException(
+					"The CENC sample entry does not contain the required tenc box.");
+		}
 
 		if (AudioSampleEntry.Dec3 is not null || AudioSampleEntry.Dac4 is not null)
 		{
@@ -125,9 +127,22 @@ public class DashFile : Mp4File
 
 	public override FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
 	{
-		return Key is null && Tenc is not null
+		return Key is null && Tenc?.DefaultIsProtected == true
 			? throw new InvalidOperationException($"This instance of {nameof(DashFile)} does not have a decryption key set.")
-			: new DashFilter(Key, AudioTrackIsUsac);
+			: new DashFilter(Key, Tenc, AudioTrackIsUsac);
+	}
+
+	private static bool ContainsCencSampleGroup(IBox box)
+	{
+		if (box is UnknownBox unknown
+			&& unknown.Header.Type is "sgpd" or "sbgp"
+			&& unknown.Data.Length >= 8
+			&& unknown.Data.AsSpan(4, 4).SequenceEqual("seig"u8))
+		{
+			return true;
+		}
+
+		return box.Children.Any(ContainsCencSampleGroup);
 	}
 
 	public void SetDecryptionKey(byte[] keyId, byte[] decryptionKey)

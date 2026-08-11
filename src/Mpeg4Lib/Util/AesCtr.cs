@@ -27,10 +27,17 @@ public unsafe class AesCtr : IDisposable
 	public unsafe void Decrypt(byte[] iv, ReadOnlySpan<byte> source, Span<byte> destination)
 	{
 		ArgumentNullException.ThrowIfNull(iv, nameof(iv));
-		ArgumentOutOfRangeException.ThrowIfNotEqual(iv.Length, AES_BLOCK_SIZE, nameof(iv));
+		if (iv.Length is not (8 or AES_BLOCK_SIZE))
+			throw new ArgumentException($"{nameof(iv)} must be exactly 8 or {AES_BLOCK_SIZE} bytes long.", nameof(iv));
 
 		if (destination.Length < source.Length)
 			throw new ArithmeticException($"Destination array is not long enough. (Parameter '{nameof(destination)}')");
+
+		//CENC permits a 64-bit IV in the high half of the AES counter; the low
+		//half begins at zero. Increment a private counter so reusable sample and
+		//track IV metadata is never mutated by decryption.
+		byte[] counter = new byte[AES_BLOCK_SIZE];
+		iv.CopyTo(counter, 0);
 
 		const int AES_NUM_DWORDS = AES_BLOCK_SIZE / sizeof(uint);
 
@@ -48,8 +55,8 @@ public unsafe class AesCtr : IDisposable
 
 					while (count >= AES_BLOCK_SIZE)
 					{
-						Encryptor.TransformBlock(iv, 0, AES_BLOCK_SIZE, encrypted_counter, 0);
-						IncrementBE(iv);
+						Encryptor.TransformBlock(counter, 0, AES_BLOCK_SIZE, encrypted_counter, 0);
+						IncrementBE(counter);
 
 						for (int i = 0; i < AES_NUM_DWORDS; i++)
 							*pD32++ = pEc32[i] ^ *pS32++;
@@ -60,7 +67,7 @@ public unsafe class AesCtr : IDisposable
 
 					if (count > 0)
 					{
-						Encryptor.TransformBlock(iv, 0, AES_BLOCK_SIZE, encrypted_counter, 0);
+						Encryptor.TransformBlock(counter, 0, AES_BLOCK_SIZE, encrypted_counter, 0);
 
 						for (int i = 0; i < count; i++, data_pos++)
 							pD[data_pos] = (byte)(pEc[i] ^ pS[data_pos]);

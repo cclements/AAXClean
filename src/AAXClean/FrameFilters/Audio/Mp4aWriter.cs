@@ -512,6 +512,7 @@ namespace AAXClean.FrameFilters.Audio
 			ms.Position = 0;
 
 			MoovBox newMoov = BoxFactory.CreateBox<MoovBox>(ms, null);
+			RemoveProtectionMetadata(newMoov);
 
 			// Create chunk offset and sample size boxes when closing the file
 			// so we know whether to create stco/co64 and stsz/stz2
@@ -529,6 +530,25 @@ namespace AAXClean.FrameFilters.Audio
 			}
 
 			return newMoov;
+		}
+
+		private static void RemoveProtectionMetadata(MoovBox moov)
+		{
+			AudioSampleEntry? audioSampleEntry =
+				moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry;
+			SinfBox? sinf = audioSampleEntry?.GetChild<SinfBox>();
+			if (audioSampleEntry is null || sinf is null)
+				return;
+
+			if (sinf.SchemeType?.Type != SchmBox.SchemeType.Cenc)
+				throw new NotSupportedException(
+					$"Only {nameof(SchmBox.SchemeType.Cenc)} protected output is currently supported.");
+
+			audioSampleEntry.Header.ChangeAtomName(sinf.OriginalFormat.DataFormat);
+			audioSampleEntry.Children.Remove(sinf);
+
+			foreach (PsshBox pssh in moov.GetChildren<PsshBox>().ToArray())
+				moov.Children.Remove(pssh);
 		}
 
 		#region IDisposable
