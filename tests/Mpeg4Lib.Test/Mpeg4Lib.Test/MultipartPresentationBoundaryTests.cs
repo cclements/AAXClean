@@ -51,6 +51,21 @@ public class MultipartPresentationBoundaryTests
 	}
 
 	[TestMethod]
+	public async Task FrameAlignedCompressedBoundary_OpensTheFollowingPart()
+	{
+		using RecordingFilter filter = new(TwoChapters());
+
+		await filter.AddInputAsync(Frame(start: 0, samples: 1000));
+		await filter.AddInputAsync(Frame(start: 1000, samples: 1000));
+		await filter.CompleteAsync();
+
+		CollectionAssert.AreEqual(new[] { "one", "two" }, filter.OpenedParts);
+		CollectionAssert.AreEqual(
+			new[] { "one", "two" },
+			filter.Writes.Select(write => write.part).ToArray());
+	}
+
+	[TestMethod]
 	public async Task OptInSplittableRouting_DividesAtTheExactHalfOpenBoundary()
 	{
 		using RecordingFilter filter = new(TwoChapters(), splitFrames: true);

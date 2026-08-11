@@ -123,7 +123,9 @@ namespace AAXClean.FrameFilters.Audio
 			//Exact media position when the reader provides it; the accumulator otherwise.
 			currentSample = input.StartSample ?? currentSample;
 
-			if (currentSample > endSample)
+			// Chapter windows are half-open: a frame beginning exactly at the prior
+			// chapter's end belongs to the following part.
+			if (currentSample >= endSample)
 			{
 				CloseCurrentWriter();
 				writerOpen = false;
@@ -184,6 +186,7 @@ namespace AAXClean.FrameFilters.Audio
 
 		private void WriteWholeFrame(TInput input)
 		{
+			bool inputIsSync = IsSyncFrame(input);
 
 			if (!writerOpen)
 			{
@@ -195,9 +198,10 @@ namespace AAXClean.FrameFilters.Audio
 					//The preroll queue holds the frames since (and including) the most
 					//recent sync frame, all of which start at or before the chapter
 					//boundary. Starting the part there gives decoders a valid entry
-					//point; the current frame follows them.
+					//point. If the current frame is itself sync, it supersedes the
+					//older queued run and is the nearest valid entry point.
 					var partFrames = new List<(TInput frame, long start)>();
-					if (StartPartAtSyncFrame)
+					if (StartPartAtSyncFrame && !inputIsSync)
 						foreach ((FrameEntry frame, long start) in prerollQueue.Frames)
 							partFrames.Add(((TInput)frame, start));
 					partFrames.Add((input, currentSample));
@@ -226,7 +230,7 @@ namespace AAXClean.FrameFilters.Audio
 				WriteFrameToFile(input, newChunk);
 			}
 
-			prerollQueue.Push(input, currentSample, IsSyncFrame(input));
+			prerollQueue.Push(input, currentSample, inputIsSync);
 
 			currentSample += input.SamplesInFrame;
 		}

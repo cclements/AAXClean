@@ -1,4 +1,6 @@
 using AAXClean;
+using AAXClean.FrameFilters;
+using AAXClean.FrameFilters.Audio;
 using Mpeg4Lib.Boxes;
 using Mpeg4Lib.Chunks;
 using System.Text;
@@ -70,6 +72,98 @@ public class PresentationWindowContractTests
 
 		Assert.IsNotNull(part);
 		AssertSparseSyncOutput(part.ToArray());
+	}
+
+	[TestMethod]
+	public async Task FrameAlignedSplit_StartsAtTheBoundarySyncWithoutOlderPreroll()
+	{
+		byte[] sourceBytes = CreateAc4Source(
+			movieTimescale: 1000,
+			mediaTimescale: 1000,
+			frameDelta: 1000,
+			samples: [1, 2, 3, 4],
+			syncSamples: [1, 3]);
+		using var source = new AAXClean.Mp4File(new MemoryStream(sourceBytes));
+		ChapterInfo chapters = new();
+		chapters.AddChapter("one", TimeSpan.FromSeconds(2));
+		chapters.AddChapter("two", TimeSpan.FromSeconds(2));
+		var parts = new List<MemoryStream>();
+
+		await source.ConvertToMultiMp4aAsync(chapters, callback =>
+		{
+			var part = new MemoryStream();
+			parts.Add(part);
+			callback.OutputFile = part;
+		});
+
+		Assert.HasCount(2, parts);
+		using var second = new AAXClean.Mp4File(new MemoryStream(parts[1].ToArray()));
+		ChunkEntry firstChunk = new ChunkEntryList(second.Moov.AudioTrack).First();
+		second.InputStream.Position = firstChunk.ChunkOffset;
+		byte[] samples = new byte[firstChunk.FrameSizes.Length];
+		for (int i = 0; i < samples.Length; i++)
+		{
+			samples[i] = (byte)second.InputStream.ReadByte();
+			Assert.AreEqual(0, second.InputStream.ReadByte());
+		}
+
+		CollectionAssert.AreEqual(new byte[] { 3, 4 }, samples);
+		Assert.AreEqual(0L, second.Moov.AudioTrack.Edts!.Elst!.SingleEdit!.Value.MediaTime);
+	}
+
+	[TestMethod]
+	public async Task SingleFileTrim_UsesCorrectedBoundarySyncWithoutOlderPreroll()
+	{
+		byte[] sourceBytes = CreateAc4Source(
+			movieTimescale: 1000,
+			mediaTimescale: 1000,
+			frameDelta: 1000,
+			samples: [1, 2, 3, 4],
+			syncSamples: [1]);
+		using var source = new AAXClean.Mp4File(new MemoryStream(sourceBytes));
+		using var output = new MemoryStream();
+		using var filter = new LosslessFilter(
+			output,
+			source,
+			new ChapterQueue(SampleRate.Hz_8000, SampleRate.Hz_8000),
+			windowStartSample: 2000,
+			windowEndSample: 4000);
+		var chunk = new ChunkEntry
+		{
+			TrackId = 1,
+			ChunkIndex = 0,
+			ChunkOffset = 0,
+			FirstSample = 0,
+			ChunkSize = 8,
+			FrameSizes = [2, 2, 2, 2],
+			FrameDurations = [1000, 1000, 1000, 1000],
+		};
+
+		for (int i = 0; i < 4; i++)
+		{
+			await filter.AddInputAsync(new FrameEntry
+			{
+				Chunk = chunk,
+				StartSample = i * 1000L,
+				SamplesInFrame = 1000,
+				FrameData = new byte[] { (byte)(i + 1), 0 },
+				IsSyncSample = i is 0 or 2,
+			});
+		}
+		await filter.CompleteAsync();
+
+		using var converted = new AAXClean.Mp4File(new MemoryStream(output.ToArray()));
+		ChunkEntry firstChunk = new ChunkEntryList(converted.Moov.AudioTrack).First();
+		converted.InputStream.Position = firstChunk.ChunkOffset;
+		byte[] samples = new byte[firstChunk.FrameSizes.Length];
+		for (int i = 0; i < samples.Length; i++)
+		{
+			samples[i] = (byte)converted.InputStream.ReadByte();
+			Assert.AreEqual(0, converted.InputStream.ReadByte());
+		}
+
+		CollectionAssert.AreEqual(new byte[] { 3, 4 }, samples);
+		Assert.AreEqual(0L, converted.Moov.AudioTrack.Edts!.Elst!.SingleEdit!.Value.MediaTime);
 	}
 
 	[TestMethod]

@@ -66,10 +66,12 @@ namespace AAXClean.FrameFilters.Audio
 				}
 
 				insideWindow = true;
-				var frames = new List<(FrameEntry frame, long start)>(preroll.Frames)
-				{
-					(input, currentSample)
-				};
+				//A corrected bitstream sync on the overlapping frame supersedes any
+				//older metadata-derived preroll and is the nearest valid entry point.
+				var frames = input.IsSyncSample ?? true
+					? new List<(FrameEntry frame, long start)>()
+					: new List<(FrameEntry frame, long start)>(preroll.Frames);
+				frames.Add((input, currentSample));
 				Mp4aWriter.SetEditList(
 					mediaTime: Math.Max(0, windowStart - frames[0].start),
 					presentedSamples: windowEnd - windowStart);
