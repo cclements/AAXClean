@@ -128,6 +128,21 @@ public class CencSemanticsTests
 	}
 
 	[TestMethod]
+	[DataRow(true, false)]
+	[DataRow(false, true)]
+	public void DashFile_InconsistentProtectionSignaling_FailsClosed(
+		bool protectedSampleEntry,
+		bool includeSinf)
+	{
+		byte[] source = CreateDashSource(
+			protectedSampleEntry: protectedSampleEntry,
+			includeSinf: includeSinf);
+
+		Assert.ThrowsExactly<InvalidDataException>(
+			() => new DashFile(new MemoryStream(source)));
+	}
+
+	[TestMethod]
 	[DataRow("sgpd")]
 	[DataRow("sbgp")]
 	public void DashFile_CencSampleGroupOverride_FailsClosed(string boxType)
@@ -205,7 +220,9 @@ public class CencSemanticsTests
 	private static byte[] CreateDashSource(
 		bool includeTenc = true,
 		bool isProtected = true,
-		string? sampleGroupBox = null)
+		string? sampleGroupBox = null,
+		bool protectedSampleEntry = true,
+		bool includeSinf = true)
 	{
 		const uint timescale = 1000;
 		const uint duration = 1000;
@@ -251,14 +268,20 @@ public class CencSemanticsTests
 			Box("frma", Encoding.ASCII.GetBytes("ac-4")),
 			Box("schm", UInt32s(0, (uint)SchmBox.SchemeType.Cenc, 0x0001_0000)),
 			schi);
-		byte[] sampleEntry = Box(
-			"enca",
+		byte[][] sampleEntryPayloads =
+		[
 			new byte[6],
 			UInt16s(1),
 			new byte[8],
 			UInt16s(2, 16, 0, 0, checked((ushort)timescale), 0),
-			Box("dac4", [0]),
-			sinf);
+			Box("dac4", [0])
+		];
+		if (includeSinf)
+			sampleEntryPayloads = [.. sampleEntryPayloads, sinf];
+
+		byte[] sampleEntry = Box(
+			protectedSampleEntry ? "enca" : "ac-4",
+			sampleEntryPayloads);
 		byte[] stsd = Box("stsd", UInt32s(0, 1), sampleEntry);
 		byte[] stts = Box("stts", UInt32s(0, 1, 1, duration));
 		byte[] stsc = Box("stsc", UInt32s(0, 1, 1, 1, 1));
