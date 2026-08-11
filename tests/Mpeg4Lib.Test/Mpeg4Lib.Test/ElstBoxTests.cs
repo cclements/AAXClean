@@ -103,14 +103,15 @@ public class ElstBoxTests
 	}
 
 	[TestMethod]
-	public void SingleEdit_IsNull_ForEmptyEditOrMultipleEntriesOrRate()
+	public void SingleEdit_Throws_ForUnsupportedForms()
 	{
-		Assert.IsNull(CreateElst().SingleEdit);                                //no entries
-		Assert.IsNull(CreateElst(new ElstBox.EditEntry(1000, -1)).SingleEdit); //empty edit
-		Assert.IsNull(CreateElst(new ElstBox.EditEntry(1000, 0, MediaRateInteger: 0)).SingleEdit);
-		Assert.IsNull(CreateElst(new ElstBox.EditEntry(1000, 0, MediaRateFraction: 1)).SingleEdit);
-		Assert.IsNull(CreateElst(
-			new ElstBox.EditEntry(1000, 0), new ElstBox.EditEntry(1000, 5000)).SingleEdit); //two entries
+		Assert.ThrowsExactly<NotSupportedException>(() => _ = CreateElst().SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(
+			() => _ = CreateElst(new ElstBox.EditEntry(1000, -1)).SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(
+			() => _ = CreateElst(new ElstBox.EditEntry(1000, 0, MediaRateInteger: 0)).SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(
+			() => _ = CreateElst(new ElstBox.EditEntry(1000, 0, MediaRateFraction: 1)).SingleEdit);
 	}
 
 	[TestMethod]

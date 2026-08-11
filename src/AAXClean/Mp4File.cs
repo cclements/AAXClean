@@ -80,8 +80,9 @@ namespace AAXClean
 				.Esds?.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 42;
 
 		//Audible USAC flags ~2 sync frames per 40 (~0.93 s apart), so 2 s of lookback always
-		//contains at least one decode entry point. All-sync codecs need none. Applied to the
-		//audio track by ProcessAudio; harmless at presentation start 0 (AddTrack clamps).
+		//contains at least one decode entry point when source metadata is absent or wrong.
+		//ChunkReader handles a present source stss exactly for every codec. Applied to the audio
+		//track by ProcessAudio; harmless at presentation start 0 (AddTrack clamps).
 		internal TimeSpan AudioLookback => AudioTrackIsUsac ? TimeSpan.FromSeconds(2) : TimeSpan.Zero;
 
 		public static Mp4Operation RelocateMoovAsync(string mp4FilePath)

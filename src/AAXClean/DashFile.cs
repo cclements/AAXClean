@@ -16,11 +16,39 @@ public class DashFile : Mp4File
 	public MdatBox FirstMdat => Mdat;
 	public SidxBox Sidx => TopLevelBoxes.OfType<SidxBox>().Single();
 
-	public override TimeSpan Duration => TimeSpan.FromSeconds((double)Moov.GetChildOrThrow<MvexBox>().GetChildOrThrow<MehdBox>().FragmentDuration / TimeScale);
+	public override TimeSpan Duration => PresentedDuration;
 
-	//Fragmented sources keep their duration in mvex/mehd and leave mdhd at zero, and they
-	//never carry an edit list, so the presented duration is simply the fragment duration.
-	public override TimeSpan PresentedDuration => Duration;
+	//Fragmented sources keep their duration in mvex/mehd (movie timescale) and leave
+	//mdhd at zero. Expose the same duration in media samples that non-fragmented callers
+	//receive from the base contract, using the shared exact half-up conversion.
+	public override long PresentedDurationSamples
+	{
+		get
+		{
+			uint movieTimescale = Moov.Mvhd.Timescale;
+			uint mediaTimescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
+			ArgumentOutOfRangeException.ThrowIfZero(movieTimescale);
+			ArgumentOutOfRangeException.ThrowIfZero(mediaTimescale);
+			ulong fragmentDuration = Moov.GetChildOrThrow<MvexBox>()
+				.GetChildOrThrow<MehdBox>()
+				.FragmentDuration;
+			return checked((long)ElstBox.ScaleDuration(fragmentDuration, movieTimescale, mediaTimescale));
+		}
+	}
+
+	public override TimeSpan PresentedDuration
+	{
+		get
+		{
+			uint mediaTimescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
+			ArgumentOutOfRangeException.ThrowIfZero(mediaTimescale);
+			ulong ticks = ElstBox.ScaleDuration(
+				checked((ulong)PresentedDurationSamples),
+				mediaTimescale,
+				checked((uint)TimeSpan.TicksPerSecond));
+			return TimeSpan.FromTicks(checked((long)ticks));
+		}
+	}
 
 	private new MdatBox Mdat => base.Mdat;
 
@@ -53,7 +81,8 @@ public class DashFile : Mp4File
 		{
 			if (sinf.SchemeType?.Type != SchmBox.SchemeType.Cenc)
 				throw new NotSupportedException($"Only {nameof(SchmBox.SchemeType.Cenc)} dash files are currently supported.");
-			Tenc = sinf.SchemeInformation?.TrackEncryption;
+			Tenc = sinf.SchemeInformation?.TrackEncryption
+				?? throw new InvalidDataException("The CENC sample entry does not contain the required tenc box.");
 			audioSampleEntry.Children.Remove(sinf);
 			audioSampleEntry.Header.ChangeAtomName(sinf.OriginalFormat.DataFormat);
 		}
@@ -99,9 +128,9 @@ public class DashFile : Mp4File
 
 	public override FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
 	{
-		return Key is null && Tenc is not null
+		return Key is null && Tenc?.DefaultIsProtected == true
 			? throw new InvalidOperationException($"This instance of {nameof(DashFile)} does not have a decryption key set.")
-			: new DashFilter(Key, AudioTrackIsUsac);
+			: new DashFilter(Key, Tenc, AudioTrackIsUsac);
 	}
 
 	public void SetDecryptionKey(byte[] keyId, byte[] decryptionKey)

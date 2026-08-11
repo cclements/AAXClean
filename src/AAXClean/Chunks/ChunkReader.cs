@@ -65,16 +65,51 @@ internal class ChunkReader : IChunkReader
 		//StartTime/EndTime are presentation times. A track with an edit list presents
 		//media starting at the edit's media_time; map the bounds into this track's media
 		//timeline so preroll before the presentation window isn't mistaken for content.
-		//The optional lookback starts dispatch early so downstream filters can begin
-		//output at the sync frame preceding the window (its exact position is only
-		//knowable post-decrypt, so the reader over-dispatches and the filter trims).
+		//The optional lookback starts dispatch early when sync status is only knowable after
+		//decrypting the bitstream. When the source has an stss, use its exact preceding sync
+		//sample for every audio codec (including AC-4) instead of relying on codec guesses.
 		long mediaOffset = track.Edts?.Elst?.SingleEdit?.MediaTime ?? 0;
-		long start = Math.Max(0, (long)(StartTime.TotalSeconds * timescale) + mediaOffset - (long)(lookback.TotalSeconds * timescale));
+		long requestedStart = Math.Max(0, (long)(StartTime.TotalSeconds * timescale) + mediaOffset);
+		long start = Math.Max(0, requestedStart - (long)(lookback.TotalSeconds * timescale));
+		if (track.Mdia.Hdlr.HandlerType == "soun" && track.Mdia.Minf.Stbl.Stss is not null)
+			start = Math.Min(start, FindPrecedingSyncSampleStart(track, requestedStart));
 		long end = EndTime == TimeSpan.MaxValue ? long.MaxValue
 			: (long)(EndTime.TotalSeconds * timescale) + mediaOffset;
 
 		var trackEntry = new TrackEntry(track.Tkhd.TrackID, timescale, filter, track, start, end);
 		TrackEntries.Add(track.Tkhd.TrackID, trackEntry);
+	}
+
+	private static long FindPrecedingSyncSampleStart(TrakBox track, long requestedStart)
+	{
+		long precedingStart = 0;
+		foreach (uint sampleNumber in track.Mdia.Minf.Stbl.Stss!.SampleNumbers)
+		{
+			long candidateStart = GetSampleStart(track.Mdia.Minf.Stbl.Stts, sampleNumber);
+			if (candidateStart <= requestedStart && candidateStart >= precedingStart)
+				precedingStart = candidateStart;
+		}
+		return precedingStart;
+	}
+
+	private static long GetSampleStart(SttsBox stts, uint oneBasedSampleNumber)
+	{
+		if (oneBasedSampleNumber == 0)
+			throw new InvalidDataException("An stss sample number must be one-based.");
+
+		ulong remainingFrames = oneBasedSampleNumber - 1u;
+		ulong start = 0;
+		foreach (SttsBox.SampleEntry entry in stts.Samples)
+		{
+			if (remainingFrames < entry.FrameCount)
+				return checked((long)(start + remainingFrames * entry.FrameDelta));
+
+			start = checked(start + (ulong)entry.FrameCount * entry.FrameDelta);
+			remainingFrames -= entry.FrameCount;
+		}
+
+		throw new InvalidDataException(
+			$"stss sample {oneBasedSampleNumber} exceeds the track's stts sample count.");
 	}
 
 	public async Task RunAsync(CancellationTokenSource cancellationSource)

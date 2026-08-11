@@ -32,12 +32,16 @@ public class PrerollQueueTests
 	}
 
 	[TestMethod]
-	public void Queue_IsBounded()
+	public void Queue_DoesNotEvictTheRequiredSyncFrame()
 	{
 		SyncPrerollQueue q = new();
-		q.Push(Frame(), 0, isSync: true);
+		FrameEntry sync = Frame();
+		q.Push(sync, 0, isSync: true);
 		for (int i = 1; i <= 5000; i++)
 			q.Push(Frame(), i * 1024L, isSync: false);
-		Assert.HasCount(4096, q.Frames);
+
+		Assert.HasCount(5001, q.Frames);
+		Assert.AreSame(sync, q.Frames.First().frame);
+		Assert.AreEqual(0L, q.Frames.First().start);
 	}
 }

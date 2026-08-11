@@ -12,6 +12,11 @@ namespace AAXClean.FrameFilters.Audio
 		protected readonly bool InputStereo;
 		protected readonly SampleRate InputSampleRate;
 
+		protected enum PresentationTimeMappingKind
+		{
+			Exact,
+		}
+
 		private readonly IEnumerator<Chapter> splitChapters;
 		private long startSample;
 		private long endSample = -1;
@@ -32,6 +37,10 @@ namespace AAXClean.FrameFilters.Audio
 		/// <summary>Whether this frame is a valid decode entry point. Default: all frames are.</summary>
 		protected virtual bool IsSyncFrame(TInput frame) => frame.IsSyncSample ?? true;
 
+		/// <summary>Whether this zero-sample entry is only a decoder-buffering placeholder.</summary>
+		protected virtual bool IsEmptyPlaceholder(TInput frame)
+			=> frame.SamplesInFrame == 0 && frame.FrameData.IsEmpty;
+
 		/// <summary>
 		/// Called after <see cref="CreateNewWriter"/> with the exact presentation window of the
 		/// new part: <paramref name="editMediaTime"/> is the offset (in media timescale units)
@@ -41,14 +50,45 @@ namespace AAXClean.FrameFilters.Audio
 		/// </summary>
 		protected virtual void OnPartOpened(long editMediaTime, long presentedSamples) { }
 
-		public MultipartFilterBase(ChapterInfo splitChapters, SampleRate inputSampleRate, bool inputStereo, long mediaTimeOffset = 0)
+		/// <summary>
+		/// Whether an input frame may be divided at exact chapter boundaries. Compressed
+		/// streams keep the default whole-frame behavior; decoded PCM filters opt in.
+		/// </summary>
+		protected virtual bool SplitFramesAtPartBoundaries => false;
+
+		/// <summary>Split an input frame after <paramref name="firstPartSamples"/> samples.</summary>
+		protected virtual (TInput first, TInput second) SplitFrame(TInput input, uint firstPartSamples)
+			=> throw new NotSupportedException($"{GetType().Name} does not support splitting input frames.");
+
+		public MultipartFilterBase(
+			ChapterInfo splitChapters,
+			SampleRate inputSampleRate,
+			bool inputStereo,
+			long mediaTimeOffset = 0)
+			: this(
+				splitChapters,
+				inputSampleRate,
+				inputStereo,
+				time => (long)Math.Round(time.TotalSeconds * (int)inputSampleRate) + mediaTimeOffset,
+				PresentationTimeMappingKind.Exact)
+		{ }
+
+		protected MultipartFilterBase(
+			ChapterInfo splitChapters,
+			SampleRate inputSampleRate,
+			bool inputStereo,
+			Func<TimeSpan, long> presentationTimeToSample,
+			PresentationTimeMappingKind mappingKind)
 		{
 			if (splitChapters is null || splitChapters.Count == 0)
 				throw new ArgumentException($"{nameof(splitChapters)} must contain at least one chapter.");
+			ArgumentNullException.ThrowIfNull(presentationTimeToSample);
+			if (mappingKind != PresentationTimeMappingKind.Exact)
+				throw new ArgumentOutOfRangeException(nameof(mappingKind));
 
 			InputSampleRate = inputSampleRate;
 			InputStereo = inputStereo;
-			this.mediaTimeOffset = mediaTimeOffset;
+			timeToSample = presentationTimeToSample;
 			startSample = currentSample = timeToSample(splitChapters.StartOffset);
 			this.splitChapters = splitChapters.GetEnumerator();
 		}
@@ -72,6 +112,18 @@ namespace AAXClean.FrameFilters.Audio
 				return Task.CompletedTask;
 			}
 
+			//Decoder placeholders carry no audio and must not move multipart state. In
+			//particular, their source coordinate may belong to a later compressed frame
+			//while the decoder is still buffering the frame that owns the next PCM output.
+			if (IsEmptyPlaceholder(input))
+				return Task.CompletedTask;
+
+			if (SplitFramesAtPartBoundaries)
+			{
+				PerformSplittableFiltering(input);
+				return Task.CompletedTask;
+			}
+
 			//Exact media position when the reader provides it; the accumulator otherwise.
 			currentSample = input.StartSample ?? currentSample;
 
@@ -88,6 +140,64 @@ namespace AAXClean.FrameFilters.Audio
 				}
 			}
 
+			WriteWholeFrame(input);
+
+			return Task.CompletedTask;
+		}
+
+		private void PerformSplittableFiltering(TInput input)
+		{
+			//Exact presentation position when the decoder provides it; the accumulator
+			//otherwise. A split suffix preserves the exact position assigned below.
+			currentSample = input.StartSample ?? currentSample;
+
+			while (input.SamplesInFrame > 0)
+			{
+				//For exact PCM routing, equality belongs to the following half-open
+				//chapter. Repeating also skips any zero-duration chapter safely.
+				while (currentSample >= endSample)
+				{
+					CloseCurrentWriter();
+					writerOpen = false;
+
+					if (!GetNextChapter())
+					{
+						startSample = endSample = long.MaxValue;
+						return;
+					}
+				}
+
+				long inputEnd = checked(currentSample + input.SamplesInFrame);
+
+				//Normally the presentation-window filter has already cropped this edge.
+				//Retaining this exact split makes the base safe for any decoded-PCM caller.
+				if (currentSample < startSample && inputEnd > startSample)
+				{
+					uint beforeStart = checked((uint)(startSample - currentSample));
+					(TInput before, TInput after) = SplitFrame(input, beforeStart);
+					WriteWholeFrame(before);
+					input = after;
+					currentSample = input.StartSample ?? currentSample;
+					continue;
+				}
+
+				if (inputEnd > endSample)
+				{
+					uint throughChapterEnd = checked((uint)(endSample - currentSample));
+					(TInput inChapter, TInput afterChapter) = SplitFrame(input, throughChapterEnd);
+					WriteWholeFrame(inChapter);
+					input = afterChapter;
+					currentSample = input.StartSample ?? currentSample;
+					continue;
+				}
+
+				WriteWholeFrame(input);
+				return;
+			}
+		}
+
+		private void WriteWholeFrame(TInput input)
+		{
 			if (!writerOpen)
 			{
 				//The chapter window may begin after the current frame (the reader dispatches
@@ -126,10 +236,11 @@ namespace AAXClean.FrameFilters.Audio
 			}
 			else if (currentSample >= startSample)
 			{
-				bool newChunk = input.Chunk.ChunkIndex > lastChunkIndex;
+				long chunkIndex = input.Chunk!.ChunkIndex;
+				bool newChunk = chunkIndex > lastChunkIndex;
 				if (newChunk)
 				{
-					lastChunkIndex = input.Chunk.ChunkIndex;
+					lastChunkIndex = chunkIndex;
 				}
 				WriteFrameToFile(input, newChunk);
 			}
@@ -137,8 +248,6 @@ namespace AAXClean.FrameFilters.Audio
 			prerollQueue.Push(input, currentSample, IsSyncFrame(input));
 
 			currentSample += input.SamplesInFrame;
-
-			return Task.CompletedTask;
 		}
 
 		private bool GetNextChapter()
@@ -152,10 +261,7 @@ namespace AAXClean.FrameFilters.Audio
 			return true;
 		}
 
-		//Chapter offsets are presentation times; frame positions are media times. The offset
-		//is the input edit list's media_time (0 without one).
-		private readonly long mediaTimeOffset;
-		private long timeToSample(TimeSpan time) => (long)Math.Round(time.TotalSeconds * (int)InputSampleRate) + mediaTimeOffset;
+		private readonly Func<TimeSpan, long> timeToSample;
 
 		protected override void Dispose(bool disposing)
 		{

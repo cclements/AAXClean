@@ -81,6 +81,9 @@ namespace AAXClean.FrameFilters.Audio
 			if (AudioSampleEntry.Dec3 is Dec3Box dec3)
 				AudioSampleEntry.Children.Remove(dec3);
 
+			if (AudioSampleEntry.Dac4 is Dac4Box dac4)
+				AudioSampleEntry.Children.Remove(dac4);
+
 			esds = EsdsBox.CreateEmpty(AudioSampleEntry);
 
 			var asc = esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig;
@@ -199,7 +202,10 @@ namespace AAXClean.FrameFilters.Audio
 				presentedSamples = Math.Min(presentedSamples, mediaDuration - mediaTime);
 
 				//segment_duration is in movie (mvhd) timescale; media_time in media (mdhd) timescale.
-				ulong segmentDuration = (ulong)((decimal)presentedSamples * Moov.Mvhd.Timescale / Moov.AudioTrack.Mdia.Mdhd.Timescale);
+				ulong segmentDuration = ElstBox.ScaleDuration(
+					checked((ulong)presentedSamples),
+					Moov.AudioTrack.Mdia.Mdhd.Timescale,
+					Moov.Mvhd.Timescale);
 
 				EdtsBox edts = Moov.AudioTrack.Edts ?? EdtsBox.CreateBlank(Moov.AudioTrack);
 				ElstBox elst = edts.Elst ?? ElstBox.CreateBlank(edts);
@@ -422,6 +428,10 @@ namespace AAXClean.FrameFilters.Audio
 
 		private static MoovBox MakeBlankMoov(MoovBox moov)
 		{
+			//Validate before the constructor writes ftyp/mdat. Unsupported edit lists cannot be
+			//faithfully rebuilt by this writer and must never be silently stripped.
+			_ = moov.AudioTrack.Edts?.Elst?.SingleEdit;
+
 			SttsBox? t1 = null;
 			StscBox? t2 = null;
 			IStszBox? t3 = null;

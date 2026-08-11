@@ -1,6 +1,8 @@
+using System;
 using Mpeg4Lib.Util;
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 
 namespace Mpeg4Lib.Boxes;
 
@@ -17,18 +19,50 @@ public class ElstBox : FullBox
 	public List<EditEntry> Entries { get; } = new List<EditEntry>();
 
 	/// <summary>
-	/// The single non-empty rate-1 edit — the only edit-list form this library writes and
-	/// honors: <see cref="EditEntry.MediaTime"/> is the presentation start within the media
+	/// The single non-empty rate-1 edit — the only edit-list form this library currently writes
+	/// and honors: <see cref="EditEntry.MediaTime"/> is the presentation start within the media
 	/// (media timescale) and <see cref="EditEntry.SegmentDuration"/> the presented duration
-	/// (movie timescale). Null when the list is empty, has multiple entries, an empty edit
-	/// (media_time -1), or a non-unity rate; callers treat those as "no edit list".
+	/// (movie timescale). Every other edit-list form throws so a remux cannot silently treat a
+	/// real presentation mapping as absent and strip it.
 	/// </summary>
 	public EditEntry? SingleEdit
-		=> Entries.Count == 1
-		&& Entries[0].MediaTime >= 0
-		&& Entries[0].MediaRateInteger == 1
-		&& Entries[0].MediaRateFraction == 0
-			? Entries[0] : null;
+	{
+		get
+		{
+			if (Entries.Count == 1)
+			{
+				EditEntry entry = Entries[0];
+				if (entry.MediaTime >= 0
+					&& entry.MediaRateInteger == 1
+					&& entry.MediaRateFraction == 0)
+					return entry;
+			}
+
+			throw new NotSupportedException(
+				"This edit list cannot be represented as the supported single non-empty rate-1 presentation window.");
+		}
+	}
+
+	/// <summary>
+	/// Convert a non-negative duration between timescales with exact rational arithmetic,
+	/// rounding to the nearest integer and rounding exact half-way values up. The same operation
+	/// is used in both movie-to-media and media-to-movie directions so edit-list round trips do
+	/// not mix nearest rounding with truncation.
+	/// </summary>
+	public static ulong ScaleDuration(ulong duration, uint fromTimescale, uint toTimescale)
+	{
+		ArgumentOutOfRangeException.ThrowIfZero(fromTimescale);
+		ArgumentOutOfRangeException.ThrowIfZero(toTimescale);
+
+		BigInteger numerator = (BigInteger)duration * toTimescale;
+		BigInteger quotient = BigInteger.DivRem(numerator, fromTimescale, out BigInteger remainder);
+		if (remainder * 2 >= fromTimescale)
+			quotient++;
+
+		return quotient <= ulong.MaxValue
+			? (ulong)quotient
+			: throw new OverflowException("The scaled edit-list duration exceeds UInt64.MaxValue.");
+	}
 
 	public static ElstBox CreateBlank(IBox parent)
 	{

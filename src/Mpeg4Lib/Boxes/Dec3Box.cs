@@ -1,6 +1,5 @@
 ﻿using Mpeg4Lib.Boxes.EC3SpecificBox;
 using Mpeg4Lib.Util;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
@@ -41,7 +40,6 @@ public class Dec3Box : Box
 
 		AverageBitrate = reader.Read(13) * 1024;
 		var num_ind_sub = reader.Read(3);
-		Debug.Assert(num_ind_sub == 0);
 
 		IndependentSubstream = new Ec3IndependentSubstream[num_ind_sub + 1];
 		for (int i = 0; i <= num_ind_sub; i++)
@@ -50,10 +48,9 @@ public class Dec3Box : Box
 		}
 
 		var indSample = IndependentSubstream.First();
-		Debug.Assert(indSample.num_dep_sub == 0);
 
 		SampleRate = indSample.GetSampleRate();
-		NumberOfChannels = indSample.ChannelCount();
+		NumberOfChannels = IndependentSubstream.Max(substream => substream.ChannelCount());
 
 		if (reader.Length - reader.Position < 8)
 			return;

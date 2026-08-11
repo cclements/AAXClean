@@ -1,6 +1,7 @@
 ﻿using AAXClean.FrameFilters;
 using AAXClean.FrameFilters.Audio;
 using Mpeg4Lib.Boxes;
+using Mpeg4Lib.Descriptors;
 using Mpeg4Lib.Util;
 using System;
 using System.Collections.Generic;
@@ -20,8 +21,7 @@ namespace AAXClean
 				throw new ArgumentException($"This instance of {nameof(Mp4File)} is not an Aax or Aaxc file.");
 
 			if (AudioSampleEntry.Esds is EsdsBox esds)
-				//This is the flag that, if set, prevents cover art from loading on android.
-				esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig.DependsOnCoreCoder = false;
+				ApplyAndroidCoverArtWorkaround(esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig);
 
 			//Must change the audio type from aavd to mp4a
 			AudioSampleEntry.Header.ChangeAtomName("mp4a");
@@ -47,6 +47,16 @@ namespace AAXClean
 		}
 		public AaxFile(Stream file) : this(file, file.Length) { }
 		public AaxFile(string fileName, FileAccess access = FileAccess.Read, FileShare share = FileShare.Read) : this(File.Open(fileName, FileMode.Open, access, share)) { }
+
+		internal static void ApplyAndroidCoverArtWorkaround(AudioSpecificConfig audioSpecificConfig)
+		{
+			ArgumentNullException.ThrowIfNull(audioSpecificConfig);
+
+			//This GA flag, if set, prevents cover art from loading on Android. USAC uses
+			//UsacConfig at this position, so its payload must remain byte-identical.
+			if (audioSpecificConfig.SpecificConfig is GASpecificConfig gaSpecificConfig)
+				gaSpecificConfig.DependsOnCoreCoder = false;
+		}
 
 		public override FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
 		{

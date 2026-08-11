@@ -36,9 +36,12 @@ public class Mpeg4File : IDisposable
 	/// segment_duration converted from movie (mvhd) timescale, or the full media duration
 	/// when there is no edit list.
 	/// </summary>
-	public long PresentedDurationSamples
+	public virtual long PresentedDurationSamples
 		=> Moov.AudioTrack.Edts?.Elst?.SingleEdit is ElstBox.EditEntry edit
-			? (long)Math.Round((decimal)edit.SegmentDuration * Moov.AudioTrack.Mdia.Mdhd.Timescale / Moov.Mvhd.Timescale)
+			? checked((long)ElstBox.ScaleDuration(
+				edit.SegmentDuration,
+				Moov.Mvhd.Timescale,
+				Moov.AudioTrack.Mdia.Mdhd.Timescale))
 			: (long)Moov.AudioTrack.Mdia.Mdhd.Duration;
 
 	/// <summary>Presented duration of the audio track (<see cref="PresentedDurationSamples"/> as time).</summary>
