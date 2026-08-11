@@ -24,6 +24,12 @@ public class TrunBox : FullBox
 
 	public TrunBox(Stream file, BoxHeader header, IBox? parent) : base(file, header, parent)
 	{
+		if (HasFirstSampleFlags && sample_flags_present)
+		{
+			throw new InvalidDataException(
+				"A trun box cannot contain first_sample_flags together with per-sample flags.");
+		}
+
 		uint sampleCount = file.ReadUInt32BE();
 		if (data_offset_present)
 			DataOffset = file.ReadInt32BE();
