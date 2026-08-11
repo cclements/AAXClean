@@ -85,6 +85,39 @@ public class ElstBoxTests
 		Assert.AreEqual(12345L, entry.MediaTime);
 	}
 
+	private static ElstBox CreateElst(params ElstBox.EditEntry[] entries)
+	{
+		var elst = BoxFactory.CreateBox<ElstBox>(
+			new MemoryStream(MakeBox("elst", UInt32sBE(0, 0))), parent: null);
+		foreach (ElstBox.EditEntry entry in entries)
+			elst.Entries.Add(entry);
+		return elst;
+	}
+
+	[TestMethod]
+	public void SingleEdit_ReturnsTheSupportedNonEmptyRateOneWindow()
+	{
+		var elst = CreateElst(new ElstBox.EditEntry(1000, 448));
+
+		Assert.AreEqual(448L, elst.SingleEdit!.Value.MediaTime);
+		Assert.AreEqual(1000ul, elst.SingleEdit.Value.SegmentDuration);
+	}
+
+	[TestMethod]
+	public void SingleEdit_RejectsEveryUnsupportedShape()
+	{
+		Assert.ThrowsExactly<NotSupportedException>(() => _ = CreateElst().SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(
+			() => _ = CreateElst(new ElstBox.EditEntry(1000, -1)).SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(
+			() => _ = CreateElst(new ElstBox.EditEntry(1000, 0, MediaRateInteger: 0)).SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(
+			() => _ = CreateElst(new ElstBox.EditEntry(1000, 0, MediaRateFraction: 1)).SingleEdit);
+		Assert.ThrowsExactly<NotSupportedException>(() => _ = CreateElst(
+			new ElstBox.EditEntry(1000, 0),
+			new ElstBox.EditEntry(1000, 5000)).SingleEdit);
+	}
+
 	[TestMethod]
 	public void UpdateVersion_SmallValues_StaysVersion0()
 	{

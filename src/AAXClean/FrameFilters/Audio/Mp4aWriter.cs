@@ -199,7 +199,10 @@ namespace AAXClean.FrameFilters.Audio
 				presentedSamples = Math.Min(presentedSamples, mediaDuration - mediaTime);
 
 				//segment_duration is in movie (mvhd) timescale; media_time in media (mdhd) timescale.
-				ulong segmentDuration = (ulong)((decimal)presentedSamples * Moov.Mvhd.Timescale / Moov.AudioTrack.Mdia.Mdhd.Timescale);
+				ulong segmentDuration = ElstBox.ScaleDuration(
+					checked((ulong)presentedSamples),
+					Moov.AudioTrack.Mdia.Mdhd.Timescale,
+					Moov.Mvhd.Timescale);
 
 				EdtsBox edts = Moov.AudioTrack.Edts ?? EdtsBox.CreateBlank(Moov.AudioTrack);
 				ElstBox elst = edts.Elst ?? ElstBox.CreateBlank(edts);
@@ -210,6 +213,20 @@ namespace AAXClean.FrameFilters.Audio
 				//With an edit list, the track and movie durations are the presented duration.
 				Moov.AudioTrack.Tkhd.Duration = segmentDuration;
 				Moov.Mvhd.Duration = segmentDuration;
+
+				if (Moov.TextTrack is not null)
+				{
+					//Chapter samples use presentation time, so keep the text track on that
+					//timeline and give it the matching identity edit.
+					Moov.TextTrack.Mdia.Mdhd.Duration = (ulong)presentedSamples;
+					Moov.TextTrack.Tkhd.Duration = segmentDuration;
+
+					EdtsBox textEdts = Moov.TextTrack.Edts ?? EdtsBox.CreateBlank(Moov.TextTrack);
+					ElstBox textElst = textEdts.Elst ?? ElstBox.CreateBlank(textEdts);
+					textElst.Entries.Clear();
+					textElst.Entries.Add(new ElstBox.EditEntry(segmentDuration, 0));
+					textElst.UpdateVersion();
+				}
 			}
 
 			(uint maxBitRate, uint avgBitrate)
@@ -407,6 +424,19 @@ namespace AAXClean.FrameFilters.Audio
 
 		private static MoovBox MakeBlankMoov(MoovBox moov)
 		{
+			//Validate before writing ftyp/mdat. Unsupported or out-of-bounds edits must
+			//not be silently stripped while rebuilding the movie box.
+			if (moov.AudioTrack.Edts?.Elst?.SingleEdit is ElstBox.EditEntry edit)
+			{
+				long presentedDuration = checked((long)ElstBox.ScaleDuration(
+					edit.SegmentDuration,
+					moov.Mvhd.Timescale,
+					moov.AudioTrack.Mdia.Mdhd.Timescale));
+				long presentationEnd = checked(edit.MediaTime + presentedDuration);
+				if (presentationEnd > checked((long)moov.AudioTrack.Mdia.Mdhd.Duration))
+					throw new InvalidDataException("The audio edit list extends beyond the media duration.");
+			}
+
 			SttsBox? t1 = null;
 			StscBox? t2 = null;
 			IStszBox? t3 = null;
