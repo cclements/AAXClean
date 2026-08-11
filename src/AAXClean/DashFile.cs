@@ -45,7 +45,15 @@ public class DashFile : Mp4File
 		var audioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
 			?? throw new InvalidDataException($"The audio track doesn't contain an {nameof(AudioSampleEntry)}");
 
-		if (audioSampleEntry.GetChild<SinfBox>() is { } sinf)
+		SinfBox? sinf = audioSampleEntry.GetChild<SinfBox>();
+		bool isProtectedSampleEntry = audioSampleEntry.Header.Type == "enca";
+		if (isProtectedSampleEntry != (sinf is not null))
+		{
+			throw new InvalidDataException(
+				"CENC audio protection requires both an enca sample entry and a sinf box.");
+		}
+
+		if (sinf is not null)
 		{
 			if (sinf.SchemeType?.Type != SchmBox.SchemeType.Cenc)
 				throw new NotSupportedException($"Only {nameof(SchmBox.SchemeType.Cenc)} dash files are currently supported.");
