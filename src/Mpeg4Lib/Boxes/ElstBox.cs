@@ -1,6 +1,8 @@
 using Mpeg4Lib.Util;
+using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 
 namespace Mpeg4Lib.Boxes;
 
@@ -15,6 +17,48 @@ public class ElstBox : FullBox
 	public override long RenderSize => base.RenderSize + 4 + Entries.Count * (Version == 1 ? 20 : 12);
 
 	public List<EditEntry> Entries { get; } = new List<EditEntry>();
+
+	/// <summary>
+	/// The single non-empty rate-1 edit — the only edit-list form this library currently
+	/// writes and honors. Every other form throws so a remux cannot silently discard a
+	/// presentation mapping it does not understand.
+	/// </summary>
+	public EditEntry? SingleEdit
+	{
+		get
+		{
+			if (Entries.Count == 1)
+			{
+				EditEntry entry = Entries[0];
+				if (entry.MediaTime >= 0
+					&& entry.MediaRateInteger == 1
+					&& entry.MediaRateFraction == 0)
+					return entry;
+			}
+
+			throw new NotSupportedException(
+				"This edit list cannot be represented as the supported single non-empty rate-1 presentation window.");
+		}
+	}
+
+	/// <summary>
+	/// Convert a non-negative duration between timescales with exact rational arithmetic,
+	/// rounding to nearest with exact half-way values rounded up.
+	/// </summary>
+	public static ulong ScaleDuration(ulong duration, uint fromTimescale, uint toTimescale)
+	{
+		ArgumentOutOfRangeException.ThrowIfZero(fromTimescale);
+		ArgumentOutOfRangeException.ThrowIfZero(toTimescale);
+
+		BigInteger numerator = (BigInteger)duration * toTimescale;
+		BigInteger quotient = BigInteger.DivRem(numerator, fromTimescale, out BigInteger remainder);
+		if (remainder * 2 >= fromTimescale)
+			quotient++;
+
+		return quotient <= ulong.MaxValue
+			? (ulong)quotient
+			: throw new OverflowException("The scaled edit-list duration exceeds UInt64.MaxValue.");
+	}
 
 	public static ElstBox CreateBlank(IBox parent)
 	{

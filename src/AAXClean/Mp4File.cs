@@ -116,8 +116,15 @@ namespace AAXClean
 				chapterQueue.AddRange(userChapters);
 			}
 
+			uint mdhdTimescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
+			long windowStart = checked(
+				PresentationStartSample + (long)Math.Round(start.TotalSeconds * mdhdTimescale));
+			long windowEnd = end == TimeSpan.MaxValue
+				? checked(PresentationStartSample + PresentedDurationSamples)
+				: checked(PresentationStartSample + (long)Math.Round(end.TotalSeconds * mdhdTimescale));
+
 			FrameTransformBase<FrameEntry, FrameEntry> filter1 = GetAudioFrameFilter();
-			LosslessFilter filter2 = new(outputStream, this, chapterQueue);
+			LosslessFilter filter2 = new(outputStream, this, chapterQueue, windowStart, windowEnd);
 			filter1.LinkTo(filter2);
 
 			if (Moov.TextTrack is not null && userChapters is null)
@@ -195,7 +202,7 @@ namespace AAXClean
 		private static TimeSpan Min(TimeSpan t1, TimeSpan t2) => t1 > t2 ? t2 : t1;
 		public virtual Mp4Operation ProcessAudio(TimeSpan startTime, TimeSpan endTime, Action<Task> continuation, params (TrakBox track, FrameFilterBase<FrameEntry> filter)[] filters)
 		{
-			IChunkReader reader = CreateChunkReader(InputStream, startTime, Min(Duration, endTime));
+			IChunkReader reader = CreateChunkReader(InputStream, startTime, Min(PresentedDuration, endTime));
 
 			foreach ((TrakBox track, FrameFilterBase<FrameEntry> filter) in filters)
 				reader.AddTrack(track, filter);
@@ -207,7 +214,7 @@ namespace AAXClean
 
 		public Mp4Operation<TResult> ProcessAudio<TResult>(TimeSpan startTime, TimeSpan endTime, Func<Task, TResult> continuation, params (TrakBox track, FrameFilterBase<FrameEntry> filter)[] filters)
 		{
-			IChunkReader reader = CreateChunkReader(InputStream, startTime, Min(Duration, endTime));
+			IChunkReader reader = CreateChunkReader(InputStream, startTime, Min(PresentedDuration, endTime));
 
 			foreach ((TrakBox track, FrameFilterBase<FrameEntry> filter) in filters)
 				reader.AddTrack(track, filter);

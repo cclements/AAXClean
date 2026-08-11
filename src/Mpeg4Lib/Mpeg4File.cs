@@ -21,6 +21,36 @@ public class Mpeg4File : IDisposable
 
 	private readonly Lazy<MetadataItems> lazyMetadataItems;
 	public virtual TimeSpan Duration => TimeSpan.FromSeconds((double)Moov.AudioTrack.Mdia.Mdhd.Duration / TimeScale);
+
+	/// <summary>Start of the presentation window within audio media, in mdhd units.</summary>
+	public long PresentationStartSample
+		=> Moov.AudioTrack.Edts?.Elst?.SingleEdit?.MediaTime ?? 0;
+
+	/// <summary>Presented audio duration in mdhd units.</summary>
+	public virtual long PresentedDurationSamples
+	{
+		get
+		{
+			long mediaDuration = checked((long)Moov.AudioTrack.Mdia.Mdhd.Duration);
+			if (Moov.AudioTrack.Edts?.Elst?.SingleEdit is not ElstBox.EditEntry edit)
+				return mediaDuration;
+
+			long presentedDuration = checked((long)ElstBox.ScaleDuration(
+				edit.SegmentDuration,
+				Moov.Mvhd.Timescale,
+				Moov.AudioTrack.Mdia.Mdhd.Timescale));
+			long presentationEnd = checked(edit.MediaTime + presentedDuration);
+			if (presentationEnd > mediaDuration)
+				throw new InvalidDataException(
+					$"The presentation window ends at media sample {presentationEnd}, beyond mdhd duration {mediaDuration}.");
+
+			return presentedDuration;
+		}
+	}
+
+	/// <summary>Presented audio duration as time.</summary>
+	public virtual TimeSpan PresentedDuration
+		=> TimeSpan.FromSeconds((double)PresentedDurationSamples / Moov.AudioTrack.Mdia.Mdhd.Timescale);
 	public int MaxBitrate => (int)(AudioSampleEntry.Esds?.ES_Descriptor.DecoderConfig.MaxBitrate ?? 0);
 	public AudioSampleEntry AudioSampleEntry { get; }
 	public List<IBox> TopLevelBoxes { get; }
