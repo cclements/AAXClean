@@ -240,6 +240,36 @@ public class DashChunkEntriesTests
 	}
 
 	[TestMethod]
+	public void OneSidxReference_CanContainMultipleFragmentsAndOnlyItsFirstSampleGetsSapSync()
+	{
+		var samples = new[] { (100u, 1u, 0u), (100u, 1u, 0u) };
+		byte[] first = MakeFragment(
+			1, 0, MakeTfhd(), MakeTrun(samples, durations: true, sizes: true), mediaBytes: 2);
+		byte[] second = MakeFragment(
+			2, 200, MakeTfhd(), MakeTrun(samples, durations: true, sizes: true), mediaBytes: 2);
+		var parsed = ParseFirstFragment(first, second);
+		using var stream = parsed.Stream;
+		var sidx = MakeSidx(1_000, 0, (first.Length + second.Length, 400));
+		var entries = new DashChunkEntries(
+			stream, 7, sidx, parsed.Moof, parsed.Mdat,
+			minimumSample: 0, maximumSample: long.MaxValue,
+			trackExtends: null, mediaTimescale: 1_000);
+		using var enumerator = entries.GetEnumerator();
+
+		Assert.IsTrue(enumerator.MoveNext());
+		ChunkEntry firstEntry = enumerator.Current;
+		stream.Position = firstEntry.ChunkOffset + firstEntry.ChunkSize;
+		Assert.IsTrue(enumerator.MoveNext());
+		ChunkEntry secondEntry = enumerator.Current;
+		stream.Position = secondEntry.ChunkOffset + secondEntry.ChunkSize;
+		Assert.IsFalse(enumerator.MoveNext());
+
+		CollectionAssert.AreEqual(new[] { true, false }, firstEntry.SyncFlags);
+		Assert.IsNull(secondEntry.SyncFlags,
+			"A SIDX SAP describes the subsegment entry point, not every fragment within it.");
+	}
+
+	[TestMethod]
 	public void Timing_UsesExactSidxBoundaryAndEachFragmentsTfdt()
 	{
 		var firstSamples = new[] { (11_988u, 1u, 0u), (11_989u, 1u, 0u) };

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -120,6 +121,8 @@ internal class ChunkReader : IChunkReader
 
 		OnInitialProgress();
 		var token = cancellationSource.Token;
+		ExceptionDispatchInfo? processingFailure = null;
+		Exception? cleanupFailure = null;
 
 		try
 		{
@@ -131,10 +134,10 @@ internal class ChunkReader : IChunkReader
 			}
 		}
 		catch (OperationCanceledException) { }
-		catch
+		catch (Exception ex)
 		{
 			cancellationSource.Cancel();
-			throw;
+			processingFailure = ExceptionDispatchInfo.Capture(ex);
 		}
 		finally
 		{
@@ -142,7 +145,25 @@ internal class ChunkReader : IChunkReader
 
 			//Always call CompleteAsync() on all filters so that every
 			//FilterLoop gets awaited and any exceptions are thrown.
-			await Task.WhenAll(TrackEntries.Values.Select(e => e.FirstFilter.CompleteAsync()));
+			try
+			{
+				await Task.WhenAll(TrackEntries.Values.Select(e => e.FirstFilter.CompleteAsync()));
+			}
+			catch (Exception ex) when (processingFailure is not null)
+			{
+				cleanupFailure = ex;
+			}
+		}
+
+		if (processingFailure is not null)
+		{
+			if (cleanupFailure is not null and not OperationCanceledException)
+				throw new AggregateException(
+					"Audio processing and filter cleanup both failed.",
+					processingFailure.SourceException,
+					cleanupFailure);
+
+			processingFailure.Throw();
 		}
 	}
 

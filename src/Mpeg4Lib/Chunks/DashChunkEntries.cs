@@ -51,16 +51,38 @@ public class DashChunkEntries : IEnumerable<ChunkEntry>
 
 		var totalDataSize = Sidx.Segments.Sum(s => (long)s.ReferenceSize);
 		var endOfFile = FirstMoof.Header.FilePosition + totalDataSize;
+		long segmentStartPosition = FirstMoof.Header.FilePosition;
+		for (int i = 0; i < segmentIndex; i++)
+			segmentStartPosition = checked(segmentStartPosition + Sidx.Segments[i].ReferenceSize);
+		long segmentEndPosition = checked(segmentStartPosition + Sidx.Segments[segmentIndex].ReferenceSize);
 
 		while (InputStream.Position < endOfFile)
 		{
 			if (startSample > MaximumSample)
 				yield break; //No more samples in range
 
-			if (segmentIndex >= Sidx.Segments.Length)
-				throw new InvalidDataException($"There are more media fragments than references in the {nameof(SidxBox)}.");
+			while (moofBox.Header.FilePosition >= segmentEndPosition)
+			{
+				if (moofBox.Header.FilePosition > segmentEndPosition)
+					throw new InvalidDataException(
+						$"A media fragment starts beyond its indexed {nameof(SidxBox)} subsegment boundary.");
+				if (++segmentIndex >= Sidx.Segments.Length)
+					throw new InvalidDataException($"There are more media fragments than references in the {nameof(SidxBox)}.");
 
-			var trackChunk = ValidateMdatSize(moofBox, mdatBox, startSample, Sidx.Segments[segmentIndex]);
+				segmentStartPosition = segmentEndPosition;
+				segmentEndPosition = checked(segmentStartPosition + Sidx.Segments[segmentIndex].ReferenceSize);
+			}
+
+			var trackChunk = ValidateMdatSize(
+				moofBox,
+				mdatBox,
+				startSample,
+				Sidx.Segments[segmentIndex],
+				moofBox.Header.FilePosition == segmentStartPosition);
+			long fragmentBoxEnd = checked(mdatBox.Header.FilePosition + mdatBox.Header.TotalBoxSize);
+			if (fragmentBoxEnd > segmentEndPosition)
+				throw new InvalidDataException(
+					$"A media fragment extends beyond its indexed {nameof(SidxBox)} subsegment boundary.");
 			long fragmentEnd = trackChunk.FrameDurations.Aggregate(startSample, (sum, duration) => checked(sum + duration));
 			if (fragmentEnd > MinimumSample)
 			{
@@ -77,13 +99,17 @@ public class DashChunkEntries : IEnumerable<ChunkEntry>
 			{
 				moofBox = BoxFactory.CreateBox<MoofBox>(InputStream, parent: null);
 				mdatBox = BoxFactory.CreateBox<MdatBox>(InputStream, parent: null);
-				segmentIndex++;
 				startSample = GetFragmentStart(moofBox, fragmentEnd);
 			}
 		}
 	}
 
-	private ChunkEntry ValidateMdatSize(MoofBox moofBox, MdatBox mdatBox, long startSample, SidxBox.Segment segment)
+	private ChunkEntry ValidateMdatSize(
+		MoofBox moofBox,
+		MdatBox mdatBox,
+		long startSample,
+		SidxBox.Segment segment,
+		bool beginsSegment)
 	{
 		if (moofBox.Traf.Trun is not TrunBox trun)
 			throw new InvalidDataException($"The {nameof(TrafBox)} doesn't contain a {nameof(TrunBox)}");
@@ -128,11 +154,16 @@ public class DashChunkEntries : IEnumerable<ChunkEntry>
 			FrameSizes = frameSizes,
 			FrameDurations = frameDurations,
 			ExtraData = extraData,
-			SyncFlags = GetSyncFlags(moofBox.Traf.Tfhd, trun, TrackExtends, segment)
+			SyncFlags = GetSyncFlags(moofBox.Traf.Tfhd, trun, TrackExtends, segment, beginsSegment)
 		};
 	}
 
-	private static bool[]? GetSyncFlags(TfhdBox tfhd, TrunBox trun, TrexBox? trackExtends, SidxBox.Segment segment)
+	private static bool[]? GetSyncFlags(
+		TfhdBox tfhd,
+		TrunBox trun,
+		TrexBox? trackExtends,
+		SidxBox.Segment segment,
+		bool beginsSegment)
 	{
 		//ISO/IEC 14496-12 § 8.8.3.1 sample flags: bit 16 is sample_is_non_sync_sample.
 		const uint SampleIsNonSyncSample = 0x00010000;
@@ -182,7 +213,7 @@ public class DashChunkEntries : IEnumerable<ChunkEntry>
 		//A SAP type 1 at delta zero proves that the referenced subsegment begins with an
 		//independently decodable sample. It says nothing about the remaining samples, so
 		//keep those conservative instead of treating the whole fragment as sync.
-		if (segment.StartsWithSAP && segment.SapType == 1 && segment.SapDeltaTime == 0)
+		if (beginsSegment && segment.StartsWithSAP && segment.SapType == 1 && segment.SapDeltaTime == 0)
 		{
 			var syncFlags = new bool[trun.Samples.Length];
 			if (syncFlags.Length > 0)
