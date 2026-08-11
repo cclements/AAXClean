@@ -97,6 +97,10 @@ namespace AAXClean
 		/// 
 		public Mp4Operation SaveAsync(bool keepMoovInFront = true)
 		{
+			if (FileType == FileType.Dash)
+				throw new NotSupportedException(
+					"Saving fragmented DASH files in place is not supported.");
+
 			ProgressTracker tracker = new() { TotalDuration = Duration };
 			Mp4Operation operation = new(t => SaveAsync(keepMoovInFront, tracker, t.Token), this, t => { });
 			tracker.ProgressUpdated += (_, _) => operation.OnProgressUpdate(new ConversionProgressEventArgs(TimeSpan.Zero, tracker.TotalDuration, tracker.Position, tracker.Speed));
