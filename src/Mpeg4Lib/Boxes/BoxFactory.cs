@@ -67,6 +67,7 @@ namespace Mpeg4Lib.Boxes
 				"senc" => new SencBox(file, header, parent),
 				"mvex" => new MvexBox(file, header, parent),
 				"mehd" => new MehdBox(file, header, parent),
+				"trex" => new TrexBox(file, header, parent),
 				"dec3" => new Dec3Box(file, header, parent),
 				"tref" => new TrefBox(file, header, parent),
 				"dac4" => new Dac4Box(file, header, parent),

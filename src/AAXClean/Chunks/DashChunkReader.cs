@@ -45,7 +45,19 @@ internal class DashChunkReader : ChunkReader
 
 		long minimumSample = singleTrack.DispatchStartSample;
 		long maximumSample = singleTrack.DispatchEndSample;
+		TrexBox trackExtends = Dash.Moov
+			.GetChildOrThrow<MvexBox>()
+			.GetTrackExtends(singleTrack.TrackId);
 
-		return new DashChunkEntries(InputStream, singleTrack.TrackId, Dash.Sidx, Dash.FirstMoof, Dash.FirstMdat, minimumSample, maximumSample);
+		return new DashChunkEntries(
+			InputStream,
+			singleTrack.TrackId,
+			Dash.Sidx,
+			Dash.FirstMoof,
+			Dash.FirstMdat,
+			minimumSample,
+			maximumSample,
+			trackExtends,
+			singleTrack.Timescale);
 	}
 }
