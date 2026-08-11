@@ -27,6 +27,7 @@ public class AudioSpecificConfig : BaseDescriptor, IASC
 
 	private static readonly byte[] SupportedObjectTypes = [1, 2, 3, 4, 6, 7, 17, 19, 20, 21, 22, 23, 42];
 	private const byte AOT_ESCAPE = 31;
+	private const byte AOT_USAC = 42;
 
 	private int ascBlobLength = 0;
 	public override int InternalSize => base.InternalSize + ascBlobLength;
@@ -84,8 +85,14 @@ public class AudioSpecificConfig : BaseDescriptor, IASC
 			: throw new NotSupportedException($"Sampling frequency index of {samplingFrequencyIndex} is not supported.");
 
 		asc.ChannelConfiguration = (int)bitReader.Read(4);
-		asc.FrameLengthFlag = bitReader.Read(1) != 0;
-		asc.DependsOnCoreCoder = bitReader.Read(1) != 0;
+
+		//AOT 42 continues with UsacConfig, not GASpecificConfig. Leave the reader at
+		//the start of that codec-specific payload so rendering can retain it verbatim.
+		if (asc.AudioObjectType != AOT_USAC)
+		{
+			asc.FrameLengthFlag = bitReader.Read(1) != 0;
+			asc.DependsOnCoreCoder = bitReader.Read(1) != 0;
+		}
 		return bitReader;
 	}
 
@@ -117,10 +124,13 @@ public class AudioSpecificConfig : BaseDescriptor, IASC
 
 		writer.Write((uint)sampleIndex, 4);
 		writer.Write((uint)ChannelConfiguration, 4);
-		writer.Write(FrameLengthFlag ? 1u : 0, 1);
-		writer.Write(DependsOnCoreCoder ? 1u : 0, 1);
+		if (AudioObjectType != AOT_USAC)
+		{
+			writer.Write(FrameLengthFlag ? 1u : 0, 1);
+			writer.Write(DependsOnCoreCoder ? 1u : 0, 1);
+		}
 
-		//Copy everything after DependsOnCoreCoder from the original ASC
+		//Copy everything after the parsed GA flags, or the complete opaque UsacConfig.
 		var startPos = bitReader.Position;
 		bitReader.CopyTo(writer);
 		bitReader.Position = startPos;
@@ -131,16 +141,58 @@ public class AudioSpecificConfig : BaseDescriptor, IASC
 	public int SamplingFrequency { get; set; }
 	public int ChannelConfiguration { get; set; }
 
-	//GASpecificConfig in ISO/IEC 14496-3 Subpart 4 4.4.1 (pp 487)
-	public bool FrameLengthFlag { get; set; }
-	public bool DependsOnCoreCoder { get; set; }
+	private bool frameLengthFlag;
+	private bool dependsOnCoreCoder;
+
+	//GASpecificConfig in ISO/IEC 14496-3 Subpart 4 4.4.1 (pp 487).
+	//Keep the legacy IASC properties harmless for object types with different syntax.
+	public bool FrameLengthFlag
+	{
+		get => AudioObjectType != AOT_USAC && frameLengthFlag;
+		set
+		{
+			if (AudioObjectType != AOT_USAC)
+				frameLengthFlag = value;
+		}
+	}
+
+	public bool DependsOnCoreCoder
+	{
+		get => AudioObjectType != AOT_USAC && dependsOnCoreCoder;
+		set
+		{
+			if (AudioObjectType != AOT_USAC)
+				dependsOnCoreCoder = value;
+		}
+	}
 
 	private class InternalAudioSpecificConfig : IASC
 	{
 		public int AudioObjectType { get; set; }
 		public int SamplingFrequency { get; set; }
 		public int ChannelConfiguration { get; set; }
-		public bool FrameLengthFlag { get; set; }
-		public bool DependsOnCoreCoder { get; set; }
+
+		private bool frameLengthFlag;
+		private bool dependsOnCoreCoder;
+
+		public bool FrameLengthFlag
+		{
+			get => AudioObjectType != AOT_USAC && frameLengthFlag;
+			set
+			{
+				if (AudioObjectType != AOT_USAC)
+					frameLengthFlag = value;
+			}
+		}
+
+		public bool DependsOnCoreCoder
+		{
+			get => AudioObjectType != AOT_USAC && dependsOnCoreCoder;
+			set
+			{
+				if (AudioObjectType != AOT_USAC)
+					dependsOnCoreCoder = value;
+			}
+		}
 	}
 }
