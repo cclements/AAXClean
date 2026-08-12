@@ -59,7 +59,7 @@ public class Ec3IndependentSubstream
 		acmod = (AudioCodingMode)reader.Read(3);
 		lfeon = reader.Read(1) > 0;
 		reader.Position += 3;
-		var num_dep_sub = reader.Read(4);
+		num_dep_sub = (byte)reader.Read(4);
 
 		if (num_dep_sub > 0)
 			chan_loc = (ChannelLocation)reader.Read(9);
