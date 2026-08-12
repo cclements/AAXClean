@@ -81,6 +81,9 @@ namespace AAXClean.FrameFilters.Audio
 			if (AudioSampleEntry.Dec3 is Dec3Box dec3)
 				AudioSampleEntry.Children.Remove(dec3);
 
+			if (AudioSampleEntry.Dac4 is Dac4Box dac4)
+				AudioSampleEntry.Children.Remove(dac4);
+
 			esds = EsdsBox.CreateEmpty(AudioSampleEntry);
 
 			var asc = esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig;
