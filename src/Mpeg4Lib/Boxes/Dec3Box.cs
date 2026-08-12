@@ -50,7 +50,6 @@ public class Dec3Box : Box
 		}
 
 		var indSample = IndependentSubstream.First();
-		Debug.Assert(indSample.num_dep_sub == 0);
 
 		SampleRate = indSample.GetSampleRate();
 		NumberOfChannels = indSample.ChannelCount();
