@@ -30,9 +30,12 @@ namespace AAXClean.FrameFilters.Audio
 			ChapterQueue = chapterQueue;
 
 			long mediaDuration = checked((long)mp4Audio.Moov.AudioTrack.Mdia.Mdhd.Duration);
+			long availableMediaEnd = Math.Max(
+				mediaDuration,
+				checked(mp4Audio.PresentationStartSample + mp4Audio.PresentedDurationSamples));
 			windowStart = windowStartSample;
-			windowEnd = Math.Min(windowEndSample, mediaDuration);
-			trimming = windowStart > 0 || windowEnd < mediaDuration;
+			windowEnd = Math.Min(windowEndSample, availableMediaEnd);
+			trimming = windowStart > 0 || windowEnd < availableMediaEnd;
 			insideWindow = !trimming;
 		}
 

@@ -112,6 +112,49 @@ public class PresentationWindowContractTests
 	}
 
 	[TestMethod]
+	public async Task UnalignedSplit_KeepsPrecedingSyncRunWhenNextFrameIsSync()
+	{
+		byte[] sourceBytes = CreateAc4Source(
+			movieTimescale: 1000,
+			mediaTimescale: 1000,
+			frameDelta: 1000,
+			samples: [1, 2, 3, 4],
+			syncSamples: [1, 2, 3]);
+		using var source = new AAXClean.Mp4File(new MemoryStream(sourceBytes));
+		ChapterInfo chapters = new();
+		chapters.AddChapter("one", TimeSpan.FromMilliseconds(1500));
+		chapters.AddChapter("two", TimeSpan.FromMilliseconds(2500));
+		var parts = new List<MemoryStream>();
+
+		await source.ConvertToMultiMp4aAsync(chapters, callback =>
+		{
+			var part = new MemoryStream();
+			parts.Add(part);
+			callback.OutputFile = part;
+		});
+
+		Assert.HasCount(2, parts);
+		using var second = new AAXClean.Mp4File(new MemoryStream(parts[1].ToArray()));
+		ChunkEntry firstChunk = new ChunkEntryList(second.Moov.AudioTrack).First();
+		second.InputStream.Position = firstChunk.ChunkOffset;
+		byte[] samples = new byte[firstChunk.FrameSizes.Length];
+		for (int i = 0; i < samples.Length; i++)
+		{
+			samples[i] = (byte)second.InputStream.ReadByte();
+			Assert.AreEqual(0, second.InputStream.ReadByte());
+		}
+
+		CollectionAssert.AreEqual(new byte[] { 2, 3, 4 }, samples);
+		CollectionAssert.AreEqual(
+			new uint[] { 1, 2 },
+			second.Moov.AudioTrack.Mdia.Minf.Stbl.Stss!.SampleNumbers);
+		ElstBox.EditEntry edit = second.Moov.AudioTrack.Edts!.Elst!.SingleEdit!.Value;
+		Assert.AreEqual(500L, edit.MediaTime);
+		Assert.AreEqual(2500ul, edit.SegmentDuration);
+		Assert.AreEqual(2500L, second.PresentedDurationSamples);
+	}
+
+	[TestMethod]
 	public async Task SingleFileTrim_UsesCorrectedBoundarySyncWithoutOlderPreroll()
 	{
 		byte[] sourceBytes = CreateAc4Source(

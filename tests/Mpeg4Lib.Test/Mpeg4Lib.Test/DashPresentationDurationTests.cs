@@ -1,4 +1,8 @@
+using AAXClean;
+using AAXClean.FrameFilters;
+using AAXClean.FrameFilters.Audio;
 using Mpeg4Lib.Boxes;
+using Mpeg4Lib.Chunks;
 using System.Text;
 
 namespace Mpeg4Lib.Test;
@@ -26,6 +30,45 @@ public class DashPresentationDurationTests
 			"Codecs reads through the base contract and must receive the DASH override.");
 		Assert.AreEqual(TimeSpan.FromTicks(5_005_000), dash.PresentedDuration);
 		Assert.AreEqual(dash.PresentedDuration, dash.Duration);
+	}
+
+	[TestMethod]
+	public async Task Fragment_duration_bounds_partial_lossless_window_when_mdhd_is_zero()
+	{
+		using var dash = new AAXClean.DashFile(new MemoryStream(
+			CreateDash(movieTimescale: 1000, mediaTimescale: 48_000, fragmentDuration: 501)));
+		using var output = new MemoryStream();
+		using var filter = new LosslessFilter(
+			output,
+			dash,
+			new ChapterQueue(SampleRate.Hz_48000, SampleRate.Hz_48000),
+			windowStartSample: 4_800,
+			windowEndSample: 14_400);
+
+		await filter.AddInputAsync(new FrameEntry
+		{
+			Chunk = new ChunkEntry
+			{
+				TrackId = 1,
+				ChunkIndex = 0,
+				ChunkOffset = 0,
+				FirstSample = 0,
+				ChunkSize = 2,
+				FrameSizes = [2],
+				FrameDurations = [24_048],
+			},
+			StartSample = 0,
+			SamplesInFrame = 24_048,
+			FrameData = new byte[] { 1, 0 },
+			IsSyncSample = true,
+		});
+		await filter.CompleteAsync();
+
+		using var converted = new AAXClean.Mp4File(new MemoryStream(output.ToArray()));
+		ElstBox.EditEntry edit = converted.Moov.AudioTrack.Edts!.Elst!.SingleEdit!.Value;
+		Assert.AreEqual(4_800L, edit.MediaTime);
+		Assert.AreEqual(200ul, edit.SegmentDuration);
+		Assert.AreEqual(9_600L, converted.PresentedDurationSamples);
 	}
 
 	[TestMethod]
