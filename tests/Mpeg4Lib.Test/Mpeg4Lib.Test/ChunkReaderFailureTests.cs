@@ -62,8 +62,13 @@ public class ChunkReaderFailureTests
 				0, // version + flags
 				0, 0, timescale, 1, // creation, modification, timescale, duration
 				0)); // language and predefined
+		byte[] hdlr = MakeBox(
+			"hdlr",
+			UInt32sBE(0, 0), // version + flags and predefined
+			System.Text.Encoding.ASCII.GetBytes("soun"),
+			new byte[12]);
 
-		byte[] source = MakeBox("trak", tkhd, MakeBox("mdia", mdhd));
+		byte[] source = MakeBox("trak", tkhd, MakeBox("mdia", mdhd, hdlr));
 		return BoxFactory.CreateBox<TrakBox>(new MemoryStream(source), parent: null);
 	}
 
