@@ -198,10 +198,12 @@ namespace AAXClean.FrameFilters.Audio
 					//The preroll queue holds the frames since (and including) the most
 					//recent sync frame, all of which start at or before the chapter
 					//boundary. Starting the part there gives decoders a valid entry
-					//point. If the current frame is itself sync, it supersedes the
-					//older queued run and is the nearest valid entry point.
+					//point. A current sync frame supersedes the older run only when it
+					//starts at or before the boundary. If it starts after an unaligned
+					//boundary, the queued run still contains presentation samples that
+					//must survive behind the output edit.
 					var partFrames = new List<(TInput frame, long start)>();
-					if (StartPartAtSyncFrame && !inputIsSync)
+					if (StartPartAtSyncFrame && (!inputIsSync || currentSample > startSample))
 						foreach ((FrameEntry frame, long start) in prerollQueue.Frames)
 							partFrames.Add(((TInput)frame, start));
 					partFrames.Add((input, currentSample));
