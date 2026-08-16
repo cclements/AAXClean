@@ -11,6 +11,7 @@ namespace AAXClean.Chunks;
 internal class DashChunkReader : ChunkReader
 {
 	private DashFile Dash { get; }
+	private readonly Dictionary<uint, long> requestedStarts = new();
 
 	public DashChunkReader(DashFile dash, Stream inputStream, TimeSpan startTime, TimeSpan endTime)
 		: base(inputStream, startTime, endTime)
@@ -36,6 +37,16 @@ internal class DashChunkReader : ChunkReader
 		if (TrackEntries.Count > 0)
 			throw new InvalidOperationException($"The {nameof(DashChunkReader)} currently only supports a single track.");
 		base.AddTrack(track, filter);
+
+		//Every accepted SIDX reference begins with SAP type 1 at delta zero. Keep the
+		//requested presentation position solely for indexed segment selection; the generic
+		//USAC dispatch start remains at media start so every frame from the selected SAP is
+		//delivered until AacValidateFilter establishes the exact bitstream sync run.
+		uint timescale = track.Mdia.Mdhd.Timescale;
+		long mediaOffset = track.Edts?.Elst?.SingleEdit?.MediaTime ?? 0;
+		requestedStarts[track.Tkhd.TrackID] = Math.Max(
+			0,
+			checked((long)(StartTime.TotalSeconds * timescale) + mediaOffset));
 	}
 
 	protected override IEnumerable<ChunkEntry> EnumerateChunks()
@@ -43,9 +54,26 @@ internal class DashChunkReader : ChunkReader
 		//Currently support only a single DASH track
 		var singleTrack = TrackEntries.Values.Single();
 
-		long minimumSample = singleTrack.DispatchStartSample;
+		bool needsBitstreamSyncDiscovery
+			= singleTrack.TrakBox.Mdia.Minf.Stbl.Stss is null && Dash.AudioTrackIsUsac;
+		long minimumSample = needsBitstreamSyncDiscovery
+			? requestedStarts[singleTrack.TrackId]
+			: singleTrack.DispatchStartSample;
 		long maximumSample = singleTrack.DispatchEndSample;
+		TrexBox trackExtends = Dash.Moov
+			.GetChildOrThrow<MvexBox>()
+			.GetTrackExtends(singleTrack.TrackId);
 
-		return new DashChunkEntries(InputStream, singleTrack.TrackId, Dash.Sidx, Dash.FirstMoof, Dash.FirstMdat, minimumSample, maximumSample);
+		return new DashChunkEntries(
+			InputStream,
+			singleTrack.TrackId,
+			Dash.Sidx,
+			Dash.FirstMoof,
+			Dash.FirstMdat,
+			minimumSample,
+			maximumSample,
+			trackExtends,
+			singleTrack.Timescale,
+			rejectCencSampleGroups: Dash.Tenc is not null);
 	}
 }

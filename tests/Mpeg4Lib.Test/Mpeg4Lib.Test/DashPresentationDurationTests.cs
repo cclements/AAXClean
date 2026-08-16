@@ -1,4 +1,9 @@
+using AAXClean;
+using AAXClean.Chunks;
+using AAXClean.FrameFilters;
+using AAXClean.FrameFilters.Audio;
 using Mpeg4Lib.Boxes;
+using Mpeg4Lib.Chunks;
 using System.Text;
 
 namespace Mpeg4Lib.Test;
@@ -29,6 +34,45 @@ public class DashPresentationDurationTests
 	}
 
 	[TestMethod]
+	public async Task Fragment_duration_bounds_partial_lossless_window_when_mdhd_is_zero()
+	{
+		using var dash = new AAXClean.DashFile(new MemoryStream(
+			CreateDash(movieTimescale: 1000, mediaTimescale: 48_000, fragmentDuration: 501)));
+		using var output = new MemoryStream();
+		using var filter = new LosslessFilter(
+			output,
+			dash,
+			new ChapterQueue(SampleRate.Hz_48000, SampleRate.Hz_48000),
+			windowStartSample: 4_800,
+			windowEndSample: 14_400);
+
+		await filter.AddInputAsync(new FrameEntry
+		{
+			Chunk = new ChunkEntry
+			{
+				TrackId = 1,
+				ChunkIndex = 0,
+				ChunkOffset = 0,
+				FirstSample = 0,
+				ChunkSize = 2,
+				FrameSizes = [2],
+				FrameDurations = [24_048],
+			},
+			StartSample = 0,
+			SamplesInFrame = 24_048,
+			FrameData = new byte[] { 1, 0 },
+			IsSyncSample = true,
+		});
+		await filter.CompleteAsync();
+
+		using var converted = new AAXClean.Mp4File(new MemoryStream(output.ToArray()));
+		ElstBox.EditEntry edit = converted.Moov.AudioTrack.Edts!.Elst!.SingleEdit!.Value;
+		Assert.AreEqual(4_800L, edit.MediaTime);
+		Assert.AreEqual(200ul, edit.SegmentDuration);
+		Assert.AreEqual(9_600L, converted.PresentedDurationSamples);
+	}
+
+	[TestMethod]
 	public void Fragment_duration_rejects_zero_movie_or_media_timescales()
 	{
 		foreach ((uint movieTimescale, uint mediaTimescale) in new[]
@@ -50,6 +94,96 @@ public class DashPresentationDurationTests
 			CreateDash(movieTimescale: 1, mediaTimescale: uint.MaxValue, fragmentDuration: uint.MaxValue)));
 
 		Assert.ThrowsExactly<OverflowException>(() => _ = dash.PresentedDurationSamples);
+	}
+
+	[TestMethod]
+	public async Task DashReader_SelectsTheIndexedSegmentButDispatchesFromItsSap()
+	{
+		using var dash = new AAXClean.DashFile(new MemoryStream(CreateTwoSegmentDash()));
+		AudioSampleEntry sampleEntry = dash.Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry!;
+		if (sampleEntry.Dac4 is Dac4Box dac4)
+			sampleEntry.Children.Remove(dac4);
+		sampleEntry.Header.ChangeAtomName("mp4a");
+		EsdsBox esds = EsdsBox.CreateEmpty(sampleEntry);
+		esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType = 42;
+		using var filter = new RecordingFilter();
+		var reader = new DashChunkReader(
+			dash,
+			dash.InputStream,
+			TimeSpan.FromMilliseconds(4500),
+			TimeSpan.FromMilliseconds(5500));
+		reader.AddTrack(dash.Moov.AudioTrack, filter);
+
+		await reader.RunAsync(new CancellationTokenSource());
+
+		CollectionAssert.AreEqual(new long?[] { 3000, 4000, 5000 },
+			filter.Frames.Select(frame => frame.StartSample).ToArray());
+		Assert.AreEqual(0x85, filter.Frames[0].FrameData.Span[0],
+			"A request inside the second segment must retain its SAP frame at the segment start.");
+		Assert.IsTrue(filter.Frames[0].IsSyncSample);
+	}
+
+	private sealed class RecordingFilter : FrameFinalBase<FrameEntry>
+	{
+		protected override int InputBufferSize => 1;
+		public List<FrameEntry> Frames { get; } = [];
+		protected override Task FlushAsync() => Task.CompletedTask;
+		protected override Task PerformFilteringAsync(FrameEntry input)
+		{
+			Frames.Add(input);
+			return Task.CompletedTask;
+		}
+	}
+
+	private static byte[] CreateTwoSegmentDash()
+	{
+		const uint timescale = 1000;
+		const uint frameDuration = 1000;
+
+		byte[] Fragment(uint sequence, uint decodeTime, byte[] payload)
+		{
+			byte[] mfhd = Box("mfhd", UInt32s(0, sequence));
+			byte[] tfhd = Box("tfhd", UInt32s(0x0002_0018, 1, frameDuration, 2));
+			byte[] tfdt = Box("tfdt", UInt32s(0, decodeTime));
+			byte[] trun = Box("trun", UInt32s(0, checked((uint)(payload.Length / 2))));
+			return [.. Box("moof", mfhd, Box("traf", tfhd, tfdt, trun)), .. Box("mdat", payload)];
+		}
+
+		byte[] first = Fragment(1, 0, [0x81, 0, 2, 0, 3, 0]);
+		byte[] secondSap = Fragment(2, 3000, [0x85, 0]);
+		byte[] secondTail = Fragment(3, 4000, [6, 0, 7, 0]);
+		byte[] ftyp = Box("ftyp", Encoding.ASCII.GetBytes("iso6"), UInt32s(0), Encoding.ASCII.GetBytes("dash"));
+		byte[] sidx = Box("sidx",
+			UInt32s(0, 1, timescale, 0, 0),
+			UInt16s(0, 2),
+			UInt32s(
+				checked((uint)first.Length), 3000, 0x9000_0000,
+				checked((uint)(secondSap.Length + secondTail.Length)), 3000, 0x9000_0000));
+
+		byte[] mvhd = Box("mvhd",
+			UInt32s(0, 0, 0, timescale, 0, 0x0001_0000),
+			UInt16s(0x0100, 0), new byte[8], new byte[36], new byte[24], UInt32s(2));
+		byte[] mvex = Box("mvex",
+			Box("mehd", UInt32s(0, 6000)),
+			Box("trex", UInt32s(0, 1, 1, frameDuration, 2, 0)));
+		byte[] tkhd = Box("tkhd",
+			UInt32s(0, 0, 0, 1, 0, 0), new byte[8],
+			UInt16s(0, 0, 0x0100, 0), new byte[36], UInt32s(0, 0));
+		byte[] mdhd = Box("mdhd", UInt32s(0, 0, 0, timescale, 0, 0));
+		byte[] hdlr = Box("hdlr", UInt32s(0, 0), Encoding.ASCII.GetBytes("soun"), new byte[12]);
+		byte[] sampleEntry = Box("ac-4",
+			new byte[6], UInt16s(1), new byte[8],
+			UInt16s(2, 16, 0, 0, (ushort)timescale, 0), Box("dac4", [0]));
+		byte[] stbl = Box("stbl",
+			Box("stsd", UInt32s(0, 1), sampleEntry),
+			Box("stts", UInt32s(0, 0)),
+			Box("stsc", UInt32s(0, 0)),
+			Box("stsz", UInt32s(0, 0, 0)),
+			Box("stco", UInt32s(0, 0)));
+		byte[] trak = Box("trak", tkhd, Box("mdia", mdhd, hdlr, Box("minf", stbl)));
+		byte[] moov = Box("moov", mvhd, mvex, trak);
+
+		return [.. ftyp, .. moov, .. sidx, .. first, .. secondSap, .. secondTail];
 	}
 
 	private static byte[] CreateDash(uint movieTimescale, uint mediaTimescale, uint fragmentDuration)
