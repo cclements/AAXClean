@@ -20,7 +20,8 @@ public interface IChunkReader
 
 internal class ChunkReader : IChunkReader
 {
-	protected record TrackEntry(uint TrackId, uint Timescale, FrameFilterBase<FrameEntry> FirstFilter, TrakBox TrakBox);
+	protected record TrackEntry(uint TrackId, uint Timescale, FrameFilterBase<FrameEntry> FirstFilter, TrakBox TrakBox,
+		long DispatchStartSample, long DispatchEndSample);
 
 	public Action<ConversionProgressEventArgs>? OnProgressUpdateDelegate { get; set; }
 	protected Dictionary<uint, TrackEntry> TrackEntries { get; } = new();
@@ -47,10 +48,9 @@ internal class ChunkReader : IChunkReader
 
 		bool ChunkHasFrameInRange(ChunkEntry value)
 		{
-			uint timeScale = GetTrackEntryFromId(value.TrackId).Timescale;
-			var minimumSample = StartTime.TotalSeconds * timeScale;
-			var maximumSample = EndTime.TotalSeconds * timeScale;
-			return value.FirstSample <= maximumSample && (value.FirstSample + value.FrameDurations.Sum(d => d)) >= minimumSample;
+			var trackEntry = GetTrackEntryFromId(value.TrackId);
+			return value.FirstSample <= trackEntry.DispatchEndSample
+				&& (value.FirstSample + value.FrameDurations.Sum(d => d)) >= trackEntry.DispatchStartSample;
 		}
 	}
 
@@ -60,8 +60,68 @@ internal class ChunkReader : IChunkReader
 
 	public virtual void AddTrack(TrakBox track, FrameFilterBase<FrameEntry> filter)
 	{
-		var trackEntry = new TrackEntry(track.Tkhd.TrackID, track.Mdia.Mdhd.Timescale, filter, track);
+		uint timescale = track.Mdia.Mdhd.Timescale;
+		long mediaOffset = track.Edts?.Elst?.SingleEdit?.MediaTime ?? 0;
+		long requestedStart = Math.Max(0, checked((long)(StartTime.TotalSeconds * timescale) + mediaOffset));
+		long start = requestedStart;
+
+		if (track.Mdia.Hdlr.HandlerType == "soun" && requestedStart > 0)
+		{
+			if (track.Mdia.Minf.Stbl.Stss is not null)
+				start = FindPrecedingSyncSampleStart(track, requestedStart);
+			else if (TrackIsUsac(track))
+				//Without stss, only the decrypted USAC access units reveal their real
+				//independence frames. No maximum interval is guaranteed, so dispatch from
+				//media start and let AacValidateFilter establish the usable sync run.
+				start = 0;
+		}
+
+		long end = EndTime == TimeSpan.MaxValue
+			? long.MaxValue
+			: checked((long)(EndTime.TotalSeconds * timescale) + mediaOffset);
+
+		var trackEntry = new TrackEntry(track.Tkhd.TrackID, timescale, filter, track, start, end);
 		TrackEntries.Add(track.Tkhd.TrackID, trackEntry);
+	}
+
+	private static bool TrackIsUsac(TrakBox track)
+		=> track.Mdia.Minf.Stbl.Stsd.AudioSampleEntry?
+			.Esds?.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 42;
+
+	private static long FindPrecedingSyncSampleStart(TrakBox track, long requestedStart)
+	{
+		long? precedingStart = null;
+		foreach (uint sampleNumber in track.Mdia.Minf.Stbl.Stss!.SampleNumbers)
+		{
+			long candidateStart = GetSampleStart(track.Mdia.Minf.Stbl.Stts, sampleNumber);
+			if (candidateStart <= requestedStart
+				&& (!precedingStart.HasValue || candidateStart > precedingStart.Value))
+				precedingStart = candidateStart;
+		}
+
+		return precedingStart
+			?? throw new InvalidDataException(
+				$"The audio track has no sync sample at or before media sample {requestedStart}.");
+	}
+
+	private static long GetSampleStart(SttsBox stts, uint oneBasedSampleNumber)
+	{
+		if (oneBasedSampleNumber == 0)
+			throw new InvalidDataException("An stss sample number must be one-based.");
+
+		ulong remainingFrames = oneBasedSampleNumber - 1u;
+		ulong start = 0;
+		foreach (SttsBox.SampleEntry entry in stts.Samples)
+		{
+			if (remainingFrames < entry.FrameCount)
+				return checked((long)(start + remainingFrames * entry.FrameDelta));
+
+			start = checked(start + (ulong)entry.FrameCount * entry.FrameDelta);
+			remainingFrames -= entry.FrameCount;
+		}
+
+		throw new InvalidDataException(
+			$"stss sample {oneBasedSampleNumber} exceeds the track's stts sample count.");
 	}
 
 	public async Task RunAsync(CancellationTokenSource cancellationSource)
@@ -114,8 +174,8 @@ internal class ChunkReader : IChunkReader
 
 		var trackEntry = GetTrackEntryFromId(chunk.TrackId);
 
-		long startSample = (long)(StartTime.TotalSeconds * trackEntry.Timescale);
-		long endSample = (long)(EndTime.TotalSeconds * trackEntry.Timescale);
+		long startSample = trackEntry.DispatchStartSample;
+		long endSample = trackEntry.DispatchEndSample;
 		uint frameDelta;
 
 		for (int start = 0, f = 0; f < chunk.FrameSizes.Length; start += chunk.FrameSizes[f], f++, sampleIndex += frameDelta)

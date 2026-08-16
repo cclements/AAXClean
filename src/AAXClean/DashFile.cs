@@ -16,7 +16,37 @@ public class DashFile : Mp4File
 	public MdatBox FirstMdat => Mdat;
 	public SidxBox Sidx => TopLevelBoxes.OfType<SidxBox>().Single();
 
-	public override TimeSpan Duration => TimeSpan.FromSeconds((double)Moov.GetChildOrThrow<MvexBox>().GetChildOrThrow<MehdBox>().FragmentDuration / TimeScale);
+	public override TimeSpan Duration => PresentedDuration;
+
+	// Fragmented sources keep duration in mvex/mehd and leave mdhd duration at zero.
+	public override long PresentedDurationSamples
+	{
+		get
+		{
+			uint movieTimescale = Moov.Mvhd.Timescale;
+			uint mediaTimescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
+			ArgumentOutOfRangeException.ThrowIfZero(movieTimescale);
+			ArgumentOutOfRangeException.ThrowIfZero(mediaTimescale);
+			ulong fragmentDuration = Moov.GetChildOrThrow<MvexBox>()
+				.GetChildOrThrow<MehdBox>()
+				.FragmentDuration;
+			return checked((long)ElstBox.ScaleDuration(fragmentDuration, movieTimescale, mediaTimescale));
+		}
+	}
+
+	public override TimeSpan PresentedDuration
+	{
+		get
+		{
+			uint mediaTimescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
+			ArgumentOutOfRangeException.ThrowIfZero(mediaTimescale);
+			ulong ticks = ElstBox.ScaleDuration(
+				checked((ulong)PresentedDurationSamples),
+				mediaTimescale,
+				checked((uint)TimeSpan.TicksPerSecond));
+			return TimeSpan.FromTicks(checked((long)ticks));
+		}
+	}
 
 	private new MdatBox Mdat => base.Mdat;
 

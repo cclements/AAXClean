@@ -12,18 +12,18 @@ namespace AAXClean.FrameFilters.Audio
 		protected readonly bool InputStereo;
 		protected readonly SampleRate InputSampleRate;
 
+		protected enum PresentationTimeMappingKind
+		{
+			Exact,
+		}
+
 		private readonly IEnumerator<Chapter> splitChapters;
 		private long startSample;
 		private long endSample = -1;
 		private long lastChunkIndex = -1;
 		private long currentSample;
-
-		//Frames since (and including) the most recent sync frame, oldest first, with each
-		//frame's exact media start position. Bounded: sync frames occur about once per second
-		//in every supported codec, and for codecs where every frame is sync the queue holds
-		//exactly one frame.
-		private readonly Queue<(TInput frame, long start)> prerollQueue = new();
-		private const int MaxPrerollFrames = 4096;
+		private bool writerOpen;
+		private readonly SyncPrerollQueue prerollQueue = new();
 
 		/// <summary>
 		/// When true, each new part begins at the most recent sync frame at or before the
@@ -36,6 +36,10 @@ namespace AAXClean.FrameFilters.Audio
 		/// <summary>Whether this frame is a valid decode entry point. Default: all frames are.</summary>
 		protected virtual bool IsSyncFrame(TInput frame) => frame.IsSyncSample ?? true;
 
+		/// <summary>Whether this zero-sample entry is only a decoder-buffering placeholder.</summary>
+		protected virtual bool IsEmptyPlaceholder(TInput frame)
+			=> frame.SamplesInFrame == 0 && frame.FrameData.IsEmpty;
+
 		/// <summary>
 		/// Called after <see cref="CreateNewWriter"/> with the exact presentation window of the
 		/// new part: <paramref name="editMediaTime"/> is the offset (in media timescale units)
@@ -45,13 +49,45 @@ namespace AAXClean.FrameFilters.Audio
 		/// </summary>
 		protected virtual void OnPartOpened(long editMediaTime, long presentedSamples) { }
 
-		public MultipartFilterBase(ChapterInfo splitChapters, SampleRate inputSampleRate, bool inputStereo)
+		/// <summary>
+		/// Whether an input frame may be divided at exact chapter boundaries. Compressed
+		/// streams keep the default whole-frame behavior; decoded PCM filters opt in.
+		/// </summary>
+		protected virtual bool SplitFramesAtPartBoundaries => false;
+
+		/// <summary>Split an input frame after <paramref name="firstPartSamples"/> samples.</summary>
+		protected virtual (TInput first, TInput second) SplitFrame(TInput input, uint firstPartSamples)
+			=> throw new NotSupportedException($"{GetType().Name} does not support splitting input frames.");
+
+		public MultipartFilterBase(
+			ChapterInfo splitChapters,
+			SampleRate inputSampleRate,
+			bool inputStereo,
+			long mediaTimeOffset = 0)
+			: this(
+				splitChapters,
+				inputSampleRate,
+				inputStereo,
+				time => (long)Math.Round(time.TotalSeconds * (int)inputSampleRate) + mediaTimeOffset,
+				PresentationTimeMappingKind.Exact)
+		{ }
+
+		protected MultipartFilterBase(
+			ChapterInfo splitChapters,
+			SampleRate inputSampleRate,
+			bool inputStereo,
+			Func<TimeSpan, long> presentationTimeToSample,
+			PresentationTimeMappingKind mappingKind)
 		{
 			if (splitChapters is null || splitChapters.Count == 0)
 				throw new ArgumentException($"{nameof(splitChapters)} must contain at least one chapter.");
+			ArgumentNullException.ThrowIfNull(presentationTimeToSample);
+			if (mappingKind != PresentationTimeMappingKind.Exact)
+				throw new ArgumentOutOfRangeException(nameof(mappingKind));
 
 			InputSampleRate = inputSampleRate;
 			InputStereo = inputStereo;
+			timeToSample = presentationTimeToSample;
 			startSample = currentSample = timeToSample(splitChapters.StartOffset);
 			this.splitChapters = splitChapters.GetEnumerator();
 		}
@@ -75,24 +111,101 @@ namespace AAXClean.FrameFilters.Audio
 				return Task.CompletedTask;
 			}
 
+			if (IsEmptyPlaceholder(input))
+				return Task.CompletedTask;
+
+			if (SplitFramesAtPartBoundaries)
+			{
+				PerformSplittableFiltering(input);
+				return Task.CompletedTask;
+			}
+
 			//Exact media position when the reader provides it; the accumulator otherwise.
 			currentSample = input.StartSample ?? currentSample;
 
-			if (currentSample > endSample)
+			// Chapter windows are half-open: a frame beginning exactly at the prior
+			// chapter's end belongs to the following part.
+			if (currentSample >= endSample)
 			{
 				CloseCurrentWriter();
+				writerOpen = false;
 
-				if (GetNextChapter())
+				if (!GetNextChapter())
+					startSample = endSample = long.MaxValue;
+			}
+
+			WriteWholeFrame(input);
+
+			return Task.CompletedTask;
+		}
+
+		private void PerformSplittableFiltering(TInput input)
+		{
+			currentSample = input.StartSample ?? currentSample;
+
+			while (input.SamplesInFrame > 0)
+			{
+				while (currentSample >= endSample)
+				{
+					CloseCurrentWriter();
+					writerOpen = false;
+
+					if (!GetNextChapter())
+					{
+						startSample = endSample = long.MaxValue;
+						return;
+					}
+				}
+
+				long inputEnd = checked(currentSample + input.SamplesInFrame);
+
+				if (currentSample < startSample && inputEnd > startSample)
+				{
+					uint beforeStart = checked((uint)(startSample - currentSample));
+					(TInput before, TInput after) = SplitFrame(input, beforeStart);
+					WriteWholeFrame(before);
+					input = after;
+					currentSample = input.StartSample ?? currentSample;
+					continue;
+				}
+
+				if (inputEnd > endSample)
+				{
+					uint throughChapterEnd = checked((uint)(endSample - currentSample));
+					(TInput inChapter, TInput afterChapter) = SplitFrame(input, throughChapterEnd);
+					WriteWholeFrame(inChapter);
+					input = afterChapter;
+					currentSample = input.StartSample ?? currentSample;
+					continue;
+				}
+
+				WriteWholeFrame(input);
+				return;
+			}
+		}
+
+		private void WriteWholeFrame(TInput input)
+		{
+			bool inputIsSync = IsSyncFrame(input);
+
+			if (!writerOpen)
+			{
+				if (currentSample + input.SamplesInFrame > startSample)
 				{
 					CreateNewWriter(TCallback.Create(splitChapters.Current));
+					writerOpen = true;
 
 					//The preroll queue holds the frames since (and including) the most
 					//recent sync frame, all of which start at or before the chapter
 					//boundary. Starting the part there gives decoders a valid entry
-					//point; the current frame follows them.
+					//point. A current sync frame supersedes the older run only when it
+					//starts at or before the boundary. If it starts after an unaligned
+					//boundary, the queued run still contains presentation samples that
+					//must survive behind the output edit.
 					var partFrames = new List<(TInput frame, long start)>();
-					if (StartPartAtSyncFrame)
-						partFrames.AddRange(prerollQueue);
+					if (StartPartAtSyncFrame && (!inputIsSync || currentSample > startSample))
+						foreach ((FrameEntry frame, long start) in prerollQueue.Frames)
+							partFrames.Add(((TInput)frame, start));
 					partFrames.Add((input, currentSample));
 
 					OnPartOpened(editMediaTime: Math.Max(0, startSample - partFrames[0].start),
@@ -110,23 +223,18 @@ namespace AAXClean.FrameFilters.Audio
 			}
 			else if (currentSample >= startSample)
 			{
-				bool newChunk = input.Chunk.ChunkIndex > lastChunkIndex;
+				long chunkIndex = input.Chunk!.ChunkIndex;
+				bool newChunk = chunkIndex > lastChunkIndex;
 				if (newChunk)
 				{
-					lastChunkIndex = input.Chunk.ChunkIndex;
+					lastChunkIndex = chunkIndex;
 				}
 				WriteFrameToFile(input, newChunk);
 			}
 
-			if (IsSyncFrame(input))
-				prerollQueue.Clear();
-			if (prerollQueue.Count == MaxPrerollFrames)
-				prerollQueue.Dequeue();
-			prerollQueue.Enqueue((input, currentSample));
+			prerollQueue.Push(input, currentSample, inputIsSync);
 
 			currentSample += input.SamplesInFrame;
-
-			return Task.CompletedTask;
 		}
 
 		private bool GetNextChapter()
@@ -140,7 +248,7 @@ namespace AAXClean.FrameFilters.Audio
 			return true;
 		}
 
-		private long timeToSample(TimeSpan time) => (long)Math.Round(time.TotalSeconds * (int)InputSampleRate);
+		private readonly Func<TimeSpan, long> timeToSample;
 
 		protected override void Dispose(bool disposing)
 		{
