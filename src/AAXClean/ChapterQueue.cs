@@ -30,6 +30,8 @@ namespace AAXClean
 		private readonly SampleRate OutputSampleRate;
 		private readonly object lockObj = new();
 		private readonly Queue<ChapterEntry> chapterEntries = new();
+		private TimeSpan userChapterDuration;
+		private long userChapterSamples;
 
 		public ChapterQueue(SampleRate inputRate, SampleRate outputRate)
 		{
@@ -67,10 +69,14 @@ namespace AAXClean
 
 			using var ms = new MemoryStream(frameData);
 			chapter.WriteChapter(ms);
-			uint sampleDelta = (uint)(chapter.Duration.TotalSeconds * (int)OutputSampleRate);
-
 			lock (lockObj)
 			{
+				userChapterDuration += chapter.Duration;
+				long chapterEndSample = (long)Math.Round(
+					userChapterDuration.TotalSeconds * (int)OutputSampleRate);
+				uint sampleDelta = checked((uint)(chapterEndSample - userChapterSamples));
+				userChapterSamples = chapterEndSample;
+
 				chapterEntries.Enqueue(new ChapterEntry(chapter.Title)
 				{
 					FrameData = frameData,
