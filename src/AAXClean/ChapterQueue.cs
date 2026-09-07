@@ -1,6 +1,7 @@
 ﻿using AAXClean.FrameFilters;
 using Mpeg4Lib;
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
@@ -25,6 +26,9 @@ namespace AAXClean
 	/// </summary>
 	public class ChapterQueue
 	{
+		private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+		private static readonly Encoding Utf16BigEndian = new UnicodeEncoding(true, false, true);
+		private static readonly Encoding Utf16LittleEndian = new UnicodeEncoding(false, false, true);
 		private int subtractNext = 0;
 		private readonly double SampleScaleFactor;
 		private readonly SampleRate OutputSampleRate;
@@ -91,8 +95,27 @@ namespace AAXClean
 		public void Add(FrameEntry entry)
 		{
 			ReadOnlySpan<byte> frameData = entry.FrameData.Span;
-			int size = frameData[1] | frameData[0];
-			string title = Encoding.UTF8.GetString(frameData.Slice(2, size));
+			if (frameData.Length < sizeof(ushort))
+				throw new InvalidDataException("The chapter sample is missing its two-byte text length.");
+			int size = BinaryPrimitives.ReadUInt16BigEndian(frameData);
+			if (size > frameData.Length - sizeof(ushort))
+				throw new InvalidDataException("The chapter text length exceeds its sample payload.");
+			ReadOnlySpan<byte> text = frameData.Slice(sizeof(ushort), size);
+			string title;
+			try
+			{
+				// QuickTime chapter text is UTF-8, or UTF-16 identified by its BOM.
+				// Preserve the original sample and extensions for lossless remux.
+				title = text.Length >= 2 && text[0] == 0xfe && text[1] == 0xff
+					? Utf16BigEndian.GetString(text[2..])
+					: text.Length >= 2 && text[0] == 0xff && text[1] == 0xfe
+						? Utf16LittleEndian.GetString(text[2..])
+						: Utf8.GetString(text);
+			}
+			catch (DecoderFallbackException ex)
+			{
+				throw new InvalidDataException("The chapter sample contains invalid Unicode text.", ex);
+			}
 
 			//Takes care of 'negative' sample deltas in malformed Stts entries (e.g. Broken Angels)
 			var sif = (int)entry.SamplesInFrame;
