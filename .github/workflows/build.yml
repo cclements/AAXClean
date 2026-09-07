@@ -54,6 +54,25 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
+      - name: Run hermetic parser regressions
+        timeout-minutes: 5
+        run: |
+          dotnet test tests/Mpeg4Lib.Test/Mpeg4Lib.Test/Mpeg4Lib.Test.csproj -c ${{ env.DOTNET_CONFIGURATION }} --filter "FullyQualifiedName!~TestSaveFile" --logger "trx;LogFileName=hermetic.trx" --results-directory artifacts/tests
+          python3 scripts/check-hermetic-trx.py artifacts/tests/hermetic.trx \
+            --require-class Mpeg4Lib.Test.ChapterQueueTests \
+            --require-class Mpeg4Lib.Test.ChapterTextTests \
+            --require-class Mpeg4Lib.Test.StszBoundaryTests \
+            --require-class Mpeg4Lib.Test.WriterSampleTableTests
+
+      - name: Retain hermetic test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hermetic-parser-tests
+          path: artifacts/tests/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Build and Pack
         id: build_pack
         run: |
