@@ -26,9 +26,8 @@ namespace AAXClean.FrameFilters.Audio
 		private readonly AudioSampleEntry AudioSampleEntry;
 		private readonly ChunkOffsetList AudioChunks = new();
 		private readonly ChunkOffsetList TextChunks = new();
-		//Since we're only working with audio files, no frame will ever be larger than ushort.MaxValue.
-		//Use shorts to save memory.
-		private readonly List<ushort> AudioSampleSizes = new();
+		//Sample lengths must retain the full range representable by the input span.
+		private readonly List<int> AudioSampleSizes = new();
 		//1-based output sample numbers of sync samples, written to an stss box on Close.
 		//ISO/IEC 23003-3 § H.1 requires enumerating USAC's independently decodable frames in
 		//an stss box; without it, seeking demuxers that trust the sample table (notably
@@ -255,13 +254,16 @@ namespace AAXClean.FrameFilters.Audio
 		private static (uint maxOneSecondBitrate, uint avgBitrate) CalculateBitrate(double timeScale, ulong duration, IStszBox stsz, SttsBox stts)
 		{
 			//Calculate the actual average bitrate because aaxc file is wrong.
-			long audioBits = stsz.TotalSize * 8;
-			uint avgBitrate = (uint)(audioBits * timeScale / duration);
+			if (timeScale <= 0 || !double.IsFinite(timeScale))
+				throw new InvalidDataException("Audio bitrate requires a positive finite timescale.");
+			if (duration == 0 && stsz.SampleCount != 0)
+				throw new InvalidDataException("Audio samples cannot have a zero total duration.");
+			double audioBits = (double)stsz.TotalSize * 8;
+			uint avgBitrate = duration == 0 ? 0 : checked((uint)(audioBits * timeScale / duration));
 
 			//Expand the stts sample table to one sample duration per frame.
-			//Audio frame sizes are always small (on the order of 1000), so cast to ushort
-			//to save on memory.
-			var frameDeltas = stts.EnumerateFrameDeltas().Select(d => (ushort)d).ToArray();
+			//Keep the full unsigned duration; large legal deltas must not wrap to zero.
+			var frameDeltas = stts.EnumerateFrameDeltas().ToArray();
 
 			if (stts.SampleTimeCount != stsz.SampleCount || stts.SampleTimeCount != frameDeltas.Length)
 				throw new InvalidOperationException($"The number of sample deltas ({stts.SampleTimeCount}) doesn't match the number of sample sizes ({stsz.SampleCount}).");
@@ -274,7 +276,7 @@ namespace AAXClean.FrameFilters.Audio
 			{
 				while (currentWindowSampleSpan > timeScale)
 				{
-					double bitrate = windowSizeInBytes * 8 * timeScale / currentWindowSampleSpan;
+					double bitrate = windowSizeInBytes * 8.0 * timeScale / currentWindowSampleSpan;
 					if (bitrate > maxOneSecondBitrate)
 						maxOneSecondBitrate = bitrate;
 
@@ -287,7 +289,11 @@ namespace AAXClean.FrameFilters.Audio
 				currentWindowSampleSpan += frameDeltas[i];
 			}
 
-			return ((uint)Math.Round(maxOneSecondBitrate), avgBitrate);
+			//There may be no next sample to trigger the loop's window evaluation.
+			if (currentWindowSampleSpan > 0)
+				maxOneSecondBitrate = Math.Max(maxOneSecondBitrate, windowSizeInBytes * 8.0 * timeScale / currentWindowSampleSpan);
+
+			return (checked((uint)Math.Round(maxOneSecondBitrate)), avgBitrate);
 		}
 
 		private readonly List<string> chapterTitles = new();
@@ -405,7 +411,7 @@ namespace AAXClean.FrameFilters.Audio
 				if (sourceIsSync == true)
 					SyncSamples.Add((uint)AudioSampleSizes.Count + 1);
 
-				AudioSampleSizes.Add((ushort)frame.Length);
+				AudioSampleSizes.Add(frame.Length);
 
 				if (CurrentFrameDuration == 0)
 				{

@@ -14,12 +14,12 @@ namespace Mpeg4Lib.Boxes;
  */
 public class StszBox : FullBox, IStszBox
 {
-	public override long RenderSize => base.RenderSize + 8 + SampleCount * sizeof(int);
+	public override long RenderSize => base.RenderSize + 8 + (SampleSize == 0 ? (long)SampleCount * sizeof(int) : 0);
 	public int SampleSize { get; }
 	private readonly int origSampleCount;
 	public int SampleCount => sampleSizes_32?.Count ?? sampleSizes_16?.Count ?? origSampleCount;
-	public int MaxSize => sampleSizes_32?.Max() ?? sampleSizes_16?.Max() ?? SampleSize;
-	public long TotalSize => sampleSizes_32?.Sum(s => (long)s) ?? sampleSizes_16?.Sum(s => (long)s) ?? SampleSize * origSampleCount;
+	public int MaxSize => SampleCount == 0 ? 0 : sampleSizes_32?.Max() ?? sampleSizes_16?.Max() ?? SampleSize;
+	public long TotalSize => sampleSizes_32?.Sum(s => (long)s) ?? sampleSizes_16?.Sum(s => (long)s) ?? (long)SampleSize * origSampleCount;
 	public int GetSizeAtIndex(int index) => sampleSizes_32?[index] ?? sampleSizes_16?[index] ?? SampleSize;
 	public long SumFirstNSizes(int firstN) => sampleSizes_32?.Take(firstN).Sum(s => (long)s) ?? sampleSizes_16?.Take(firstN).Sum(s => (long)s) ?? (long)SampleSize * firstN;
 
@@ -29,7 +29,12 @@ public class StszBox : FullBox, IStszBox
 	unsafe public StszBox(Stream file, BoxHeader header, IBox? parent)
 		: base(file, header, parent)
 	{
-		SampleSize = file.ReadInt32BE();
+		if (RemainingBoxLength(file) < 8)
+			throw new InvalidDataException("The sample-size box is missing its size/count fields.");
+		uint sampleSize = file.ReadUInt32BE();
+		if (sampleSize > int.MaxValue)
+			throw new NotSupportedException("Mpeg4Lib does not support samples larger than the managed buffer limit.");
+		SampleSize = (int)sampleSize;
 		var sampleCountU = file.ReadUInt32BE();
 
 		//Technically we're losing half the capacity by using a List<T> with int.MaxValue capacity, but at
@@ -41,6 +46,11 @@ public class StszBox : FullBox, IStszBox
 		if (SampleSize > 0)
 			return;
 
+		long tableBytes = (long)origSampleCount * sizeof(int);
+		if (tableBytes > RemainingBoxLength(file) ||
+			(file.CanSeek && tableBytes > file.Length - file.Position))
+			throw new InvalidDataException("The sample-size table exceeds its box or available stream payload.");
+
 		sampleSizes_32 = new(origSampleCount);
 		CollectionsMarshal.SetCount(sampleSizes_32, origSampleCount);
 		Span<int> intListSpan = CollectionsMarshal.AsSpan(sampleSizes_32);
@@ -51,6 +61,9 @@ public class StszBox : FullBox, IStszBox
 		{
 			BinaryPrimitives.ReverseEndianness(intListSpan, intListSpan);
 		}
+		foreach (int size in intListSpan)
+			if (size < 0)
+				throw new NotSupportedException("Mpeg4Lib does not support samples larger than the managed buffer limit.");
 
 		if (intListSpan.AllLessThanOrEqual(ushort.MaxValue))
 		{
@@ -108,12 +121,8 @@ public class StszBox : FullBox, IStszBox
 
 		if (sampleSizes_32 is not null)
 		{
-			Span<int> intSpan = CollectionsMarshal.AsSpan(sampleSizes_32);
-			if (BitConverter.IsLittleEndian)
-			{
-				BinaryPrimitives.ReverseEndianness(intSpan, intSpan);
-			}
-			file.Write(MemoryMarshal.AsBytes(intSpan));
+			foreach (int size in sampleSizes_32)
+				file.WriteInt32BE(size);
 		}
 		else if (sampleSizes_16 is not null)
 		{

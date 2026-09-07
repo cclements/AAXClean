@@ -1,4 +1,6 @@
-﻿namespace Mpeg4Lib.Boxes;
+﻿using System;
+
+namespace Mpeg4Lib.Boxes;
 
 public interface IStszBox : IBox
 {
@@ -18,13 +20,15 @@ public interface IStszBox : IBox
 	/// <returns>A tuple containing the size of each frame in an int[] and the total size of all the frames. </returns>
 	(int[] frameSizes, int framesSizeTotal) GetFrameSizes(uint firstFrameIndex, uint numFrames)
 	{
+		if (firstFrameIndex > (uint)SampleCount || numFrames > (uint)SampleCount - firstFrameIndex)
+			throw new ArgumentOutOfRangeException(nameof(numFrames), "The requested frames exceed the sample-size table.");
 		int[] frameSizes = new int[numFrames];
 		int framesSizeTotal = 0;
 
 		for (uint i = 0; i < numFrames; i++)
 		{
 			frameSizes[i] = GetSizeAtIndex((int)(i + firstFrameIndex));
-			framesSizeTotal += frameSizes[i];
+			framesSizeTotal = checked(framesSizeTotal + frameSizes[i]);
 		}
 
 		return (frameSizes, framesSizeTotal);
