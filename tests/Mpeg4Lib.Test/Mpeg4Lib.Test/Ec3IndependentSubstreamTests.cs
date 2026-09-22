@@ -52,6 +52,35 @@ public class Ec3IndependentSubstreamTests
 			"5.1 plus the Lc/Rc pair, Cs, and LFE2 dependent locations must report ten channels.");
 	}
 
+	[TestMethod]
+	[DataRow(0u)]
+	[DataRow(1u)]
+	[DataRow(64u)]
+	[DataRow(128u)]
+	[DataRow(640u)]
+	[DataRow(8191u)]
+	public void Dec3_data_rate_is_decimal_kilobits_and_payload_round_trips(uint kilobits)
+	{
+		var writer = new BitWriter();
+		writer.Write(kilobits, 13);
+		writer.Write(0, 3);
+		WriteIndependentSubstream(writer);
+		byte[] payload = writer.ToByteArray();
+		using var file = new MemoryStream();
+		WriteUInt32BigEndian(file, (uint)(8 + payload.Length));
+		file.Write("dec3"u8);
+		file.Write(payload);
+		byte[] original = file.ToArray();
+		file.Position = 0;
+		using var dec3 = BoxFactory.CreateBox<Dec3Box>(file, parent: null);
+		Assert.AreEqual(kilobits * 1000u, dec3.AverageBitrate);
+		Assert.AreEqual(48000, dec3.SampleRate);
+		Assert.AreEqual(10, dec3.NumberOfChannels);
+		using var rendered = new MemoryStream();
+		dec3.Save(rendered);
+		CollectionAssert.AreEqual(original, rendered.ToArray());
+	}
+
 	private static Ec3IndependentSubstream ParseIndependentSubstream()
 	{
 		var writer = new BitWriter();

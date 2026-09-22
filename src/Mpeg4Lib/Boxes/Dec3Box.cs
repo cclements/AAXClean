@@ -15,7 +15,7 @@ public class Dec3Box : Box
 
 	private readonly byte[] Ec3Data;
 	/// <summary>
-	/// ETSI TS 102 366 F.6.2.2 data_rate * 1024
+	/// Average data rate in bits per second; data_rate uses decimal kilobits.
 	/// </summary>
 	public uint AverageBitrate { get; }
 	public int SampleRate { get; }
@@ -39,7 +39,7 @@ public class Dec3Box : Box
 		Ec3Data = file.ReadBlock((int)(header.TotalBoxSize - header.HeaderSize));
 		var reader = new BitReader(Ec3Data);
 
-		AverageBitrate = reader.Read(13) * 1024;
+		AverageBitrate = reader.Read(13) * 1000;
 		var num_ind_sub = reader.Read(3);
 		Debug.Assert(num_ind_sub == 0);
 
