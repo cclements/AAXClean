@@ -1,4 +1,5 @@
 ﻿using Mpeg4Lib.Boxes;
+using Mpeg4Lib.Descriptors;
 using Mpeg4Lib.Util;
 using System;
 using System.Collections.Generic;
@@ -68,10 +69,8 @@ namespace AAXClean.FrameFilters.Audio
 		}
 
 		public Mp4aWriter(Stream outputFile, FtypBox ftyp, MoovBox moov, byte[] ascBytes)
-			: this(outputFile, ftyp, moov)
+			: this(outputFile, ftyp, ValidateOutputConfiguration(moov, ascBytes))
 		{
-			ArgumentNullException.ThrowIfNull(ascBytes, nameof(ascBytes));
-
 			AudioSampleEntry.Header.ChangeAtomName("mp4a");
 
 			if (AudioSampleEntry.Esds is EsdsBox esds)
@@ -88,11 +87,28 @@ namespace AAXClean.FrameFilters.Audio
 			var asc = esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig;
 
 			asc.AscBlob = ascBytes;
-			if (asc.ChannelConfiguration > 2)
-				throw new NotSupportedException($"Only supports maximum of 2-channel audio. (Channels={asc.ChannelConfiguration})");
-			AudioSampleEntry.ChannelCount = (ushort)asc.ChannelConfiguration;
+			AudioSampleEntry.ChannelCount = checked((ushort)asc.ChannelConfiguration);
 
 			SetTimeScale((uint)asc.SamplingFrequency);
+		}
+
+		private static MoovBox ValidateOutputConfiguration(MoovBox moov, byte[] ascBytes)
+		{
+			// Validate before the delegating constructor writes ftyp or mdat. This
+			// sample-entry implementation cannot represent a rate above 65,535 Hz
+			// or infer channel count from a program-config element.
+			ArgumentNullException.ThrowIfNull(ascBytes);
+			IASC asc;
+			try { asc = AudioSpecificConfig.Parse(ascBytes); }
+			catch (InvalidOperationException error)
+			{
+				throw new InvalidDataException("Truncated AAC output configuration.", error);
+			}
+			if (asc.SamplingFrequency > ushort.MaxValue)
+				throw new NotSupportedException("AAC output above 65,535 Hz is not supported by this MP4 sample entry.");
+			if (asc.ChannelConfiguration is not 1 and not 2)
+				throw new NotSupportedException("AAC output requires an explicit mono or stereo channel configuration.");
+			return moov;
 		}
 
 		private (long mediaTime, long presentedSamples)? EditList;
@@ -109,8 +125,7 @@ namespace AAXClean.FrameFilters.Audio
 
 		private void SetTimeScale(uint timeScale)
 		{
-			Debug.Assert(timeScale <= ushort.MaxValue);
-			AudioSampleEntry.SampleRate = (ushort)timeScale;
+			AudioSampleEntry.SampleRate = checked((ushort)timeScale);
 			Moov.AudioTrack.Mdia.Mdhd.Timescale = timeScale;
 			// A newly encoded sample must be exactly representable in movie time.
 			// Retaining the source's coarser clock rounds edit-list durations and can
