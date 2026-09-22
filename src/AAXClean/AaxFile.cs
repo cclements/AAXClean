@@ -14,39 +14,54 @@ namespace AAXClean
 		public byte[]? Key { get; private set; }
 		public byte[]? IV { get; private set; }
 
-		public AaxFile(Stream file, long fileSize, bool additionalFixups = true) : base(file, fileSize)
+		public AaxFile(Stream file, long fileSize, bool additionalFixups = true)
+			: this(file, fileSize, additionalFixups, disposeOnFailure: false) { }
+
+		private AaxFile(Stream file, bool disposeOnFailure)
+			: this(file, file.Length, additionalFixups: true, disposeOnFailure) { }
+
+		private AaxFile(Stream file, long fileSize, bool additionalFixups, bool disposeOnFailure)
+			: base(file, fileSize, disposeOnFailure)
 		{
-			if (FileType != FileType.Aax && FileType != FileType.Aaxc)
-				throw new ArgumentException($"This instance of {nameof(Mp4File)} is not an Aax or Aaxc file.");
-
-			if (AudioSampleEntry.Esds is EsdsBox esds)
-				//This is the flag that, if set, prevents cover art from loading on android.
-				esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig.DependsOnCoreCoder = false;
-
-			//Must change the audio type from aavd to mp4a
-			AudioSampleEntry.Header.ChangeAtomName("mp4a");
-
-			//These actions will alter the mpeg-4 size and should not
-			//be performed unless re-writing the entire mpeg-4 file.
-			if (additionalFixups)
+			try
 			{
-				//Remove extra Free boxes
-				List<IBox> children = AudioSampleEntry.Children;
-				for (int i = children.Count - 1; i >= 0; i--)
-				{
-					if (children[i] is FreeBox)
-						children.RemoveAt(i);
-				}
+				if (FileType != FileType.Aax && FileType != FileType.Aaxc)
+					throw new ArgumentException($"This instance of {nameof(Mp4File)} is not an Aax or Aaxc file.");
 
-				Ftyp = FtypBox.Create("isom", 0x200);
-				Ftyp.CompatibleBrands.Add("iso2");
-				Ftyp.CompatibleBrands.Add("mp41");
-				Ftyp.CompatibleBrands.Add("M4A ");
-				Ftyp.CompatibleBrands.Add("M4B ");
+				if (AudioSampleEntry.Esds is EsdsBox esds)
+					//This is the flag that, if set, prevents cover art from loading on android.
+					esds.ES_Descriptor.DecoderConfig.AudioSpecificConfig.DependsOnCoreCoder = false;
+
+				//Must change the audio type from aavd to mp4a
+				AudioSampleEntry.Header.ChangeAtomName("mp4a");
+
+				//These actions will alter the mpeg-4 size and should not
+				//be performed unless re-writing the entire mpeg-4 file.
+				if (additionalFixups)
+				{
+					//Remove extra Free boxes
+					List<IBox> children = AudioSampleEntry.Children;
+					for (int i = children.Count - 1; i >= 0; i--)
+					{
+						if (children[i] is FreeBox)
+							children.RemoveAt(i);
+					}
+
+					Ftyp = FtypBox.Create("isom", 0x200);
+					Ftyp.CompatibleBrands.Add("iso2");
+					Ftyp.CompatibleBrands.Add("mp41");
+					Ftyp.CompatibleBrands.Add("M4A ");
+					Ftyp.CompatibleBrands.Add("M4B ");
+				}
+			}
+			catch
+			{
+				DisposeFailedConstruction();
+				throw;
 			}
 		}
 		public AaxFile(Stream file) : this(file, file.Length) { }
-		public AaxFile(string fileName, FileAccess access = FileAccess.Read, FileShare share = FileShare.Read) : this(File.Open(fileName, FileMode.Open, access, share)) { }
+		public AaxFile(string fileName, FileAccess access = FileAccess.Read, FileShare share = FileShare.Read) : this(File.Open(fileName, FileMode.Open, access, share), disposeOnFailure: true) { }
 
 		public override FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
 		{

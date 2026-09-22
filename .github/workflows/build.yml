@@ -76,7 +76,8 @@ jobs:
             --require-class Mpeg4Lib.Test.SyncAdmissionTests \
             --require-class Mpeg4Lib.Test.FrameFilterFailureTests \
             --require-class Mpeg4Lib.Test.ChunkReaderFailureTests \
-            --require-class Mpeg4Lib.Test.Ec3IndependentSubstreamTests
+            --require-class Mpeg4Lib.Test.Ec3IndependentSubstreamTests \
+            --require-class Mpeg4Lib.Test.FailedFileOpenTests
 
       - name: Retain hermetic test evidence
         if: always()

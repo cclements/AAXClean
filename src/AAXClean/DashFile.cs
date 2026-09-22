@@ -63,57 +63,67 @@ public class DashFile : Mp4File
 	}
 
 	public DashFile(string fileName, FileAccess access = FileAccess.Read, FileShare share = FileShare.Read)
-		: this(File.Open(fileName, FileMode.Open, access, share)) { }
+		: this(File.Open(fileName, FileMode.Open, access, share), disposeOnFailure: true) { }
 	public DashFile(Stream file) : this(file, file.Length) { }
-	public DashFile(Stream file, long fileLength) : base(file, fileLength)
+	private DashFile(Stream file, bool disposeOnFailure) : this(file, file.Length, disposeOnFailure) { }
+	public DashFile(Stream file, long fileLength) : this(file, fileLength, disposeOnFailure: false) { }
+	private DashFile(Stream file, long fileLength, bool disposeOnFailure) : base(file, fileLength, disposeOnFailure)
 	{
-		if (FileType != FileType.Dash)
-			throw new ArgumentException($"This instance of {nameof(Mp4File)} is not a Dash file.");
-
-		FirstMoof = TopLevelBoxes.OfType<MoofBox>().Single();
-
-		var audioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
-			?? throw new InvalidDataException($"The audio track doesn't contain an {nameof(AudioSampleEntry)}");
-
-		SinfBox? sinf = audioSampleEntry.GetChild<SinfBox>();
-		bool isProtectedSampleEntry = audioSampleEntry.Header.Type == "enca";
-		if (isProtectedSampleEntry != (sinf is not null))
+		try
 		{
-			throw new InvalidDataException(
-				"CENC audio protection requires both an enca sample entry and a sinf box.");
+			if (FileType != FileType.Dash)
+				throw new ArgumentException($"This instance of {nameof(Mp4File)} is not a Dash file.");
+
+			FirstMoof = TopLevelBoxes.OfType<MoofBox>().Single();
+
+			var audioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
+				?? throw new InvalidDataException($"The audio track doesn't contain an {nameof(AudioSampleEntry)}");
+
+			SinfBox? sinf = audioSampleEntry.GetChild<SinfBox>();
+			bool isProtectedSampleEntry = audioSampleEntry.Header.Type == "enca";
+			if (isProtectedSampleEntry != (sinf is not null))
+			{
+				throw new InvalidDataException(
+					"CENC audio protection requires both an enca sample entry and a sinf box.");
+			}
+
+			if (sinf is not null)
+			{
+				if (sinf.SchemeType?.Type != SchmBox.SchemeType.Cenc)
+					throw new NotSupportedException($"Only {nameof(SchmBox.SchemeType.Cenc)} dash files are currently supported.");
+
+				if (TopLevelBoxes.Any(SampleGroups.ContainsCencSampleGroup))
+					throw new NotSupportedException(
+						"CENC sample-group protection overrides (seig) are not supported.");
+
+				Tenc = sinf.SchemeInformation?.TrackEncryption
+					?? throw new InvalidDataException(
+						"The CENC sample entry does not contain the required tenc box.");
+			}
+
+			if (AudioSampleEntry.Dec3 is not null || AudioSampleEntry.Dac4 is not null)
+			{
+				Ftyp = FtypBox.Create("mp42", 0);
+				Ftyp.CompatibleBrands.Add("dby1");
+				Ftyp.CompatibleBrands.Add("iso8");
+				Ftyp.CompatibleBrands.Add("isom");
+				Ftyp.CompatibleBrands.Add("mp41");
+				Ftyp.CompatibleBrands.Add("M4A ");
+				Ftyp.CompatibleBrands.Add("M4B ");
+			}
+			else
+			{
+				Ftyp = FtypBox.Create("isom", 0x200);
+				Ftyp.CompatibleBrands.Add("iso2");
+				Ftyp.CompatibleBrands.Add("mp41");
+				Ftyp.CompatibleBrands.Add("M4A ");
+				Ftyp.CompatibleBrands.Add("M4B ");
+			}
 		}
-
-		if (sinf is not null)
+		catch
 		{
-			if (sinf.SchemeType?.Type != SchmBox.SchemeType.Cenc)
-				throw new NotSupportedException($"Only {nameof(SchmBox.SchemeType.Cenc)} dash files are currently supported.");
-
-			if (TopLevelBoxes.Any(SampleGroups.ContainsCencSampleGroup))
-				throw new NotSupportedException(
-					"CENC sample-group protection overrides (seig) are not supported.");
-
-			Tenc = sinf.SchemeInformation?.TrackEncryption
-				?? throw new InvalidDataException(
-					"The CENC sample entry does not contain the required tenc box.");
-		}
-
-		if (AudioSampleEntry.Dec3 is not null || AudioSampleEntry.Dac4 is not null)
-		{
-			Ftyp = FtypBox.Create("mp42", 0);
-			Ftyp.CompatibleBrands.Add("dby1");
-			Ftyp.CompatibleBrands.Add("iso8");
-			Ftyp.CompatibleBrands.Add("isom");
-			Ftyp.CompatibleBrands.Add("mp41");
-			Ftyp.CompatibleBrands.Add("M4A ");
-			Ftyp.CompatibleBrands.Add("M4B ");
-		}
-		else
-		{
-			Ftyp = FtypBox.Create("isom", 0x200);
-			Ftyp.CompatibleBrands.Add("iso2");
-			Ftyp.CompatibleBrands.Add("mp41");
-			Ftyp.CompatibleBrands.Add("M4A ");
-			Ftyp.CompatibleBrands.Add("M4B ");
+			DisposeFailedConstruction();
+			throw;
 		}
 	}
 

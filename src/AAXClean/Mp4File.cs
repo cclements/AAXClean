@@ -50,26 +50,38 @@ namespace AAXClean
 
 		public SampleRate SampleRate => (SampleRate)TimeScale;
 
-		public Mp4File(Stream file, long fileSize) : base(file, fileSize)
+		public Mp4File(Stream file, long fileSize) : this(file, fileSize, disposeOnFailure: false) { }
+
+		protected Mp4File(Stream file, bool disposeOnFailure) : this(file, file.Length, disposeOnFailure) { }
+
+		protected Mp4File(Stream file, long fileSize, bool disposeOnFailure) : base(file, fileSize, disposeOnFailure)
 		{
+			try
+			{
 #pragma warning disable CS0618 // Type or member is obsolete
-			lazyAppleTags = new(() => new AppleTags(Moov.ILst ?? Moov.CreateEmptyMetadata()));
+				lazyAppleTags = new(() => new AppleTags(Moov.ILst ?? Moov.CreateEmptyMetadata()));
 #pragma warning restore CS0618
 
-			FileType = Ftyp.CompatibleBrands.Any(b => b == "dash")
-				? FileType.Dash
-				: Ftyp.MajorBrand switch
-				{
-					"aax " => FileType.Aax,
-					"aaxc" => FileType.Aaxc,
-					_ => FileType.Mpeg4
-				};
+				FileType = Ftyp.CompatibleBrands.Any(b => b == "dash")
+					? FileType.Dash
+					: Ftyp.MajorBrand switch
+					{
+						"aax " => FileType.Aax,
+						"aaxc" => FileType.Aaxc,
+						_ => FileType.Mpeg4
+					};
+			}
+			catch
+			{
+				DisposeFailedConstruction();
+				throw;
+			}
 		}
 
 		public Mp4File(Stream file) : this(file, file.Length) { }
 
 		public Mp4File(string fileName, FileAccess access = FileAccess.Read, FileShare share = FileShare.Read)
-			: this(File.Open(fileName, FileMode.Open, access, share)) { }
+			: this(File.Open(fileName, FileMode.Open, access, share), disposeOnFailure: true) { }
 
 		public virtual FrameTransformBase<FrameEntry, FrameEntry> GetAudioFrameFilter()
 			=> new AacValidateFilter(AudioTrackIsUsac);

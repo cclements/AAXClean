@@ -51,25 +51,40 @@ public class Mpeg4File : IDisposable
 	public List<IBox> TopLevelBoxes { get; }
 
 	private int m_Disposed;
+	private readonly bool disposeInputOnFailure;
 	protected bool Disposed => m_Disposed != 0;
 
 	public Mpeg4File(Stream file) : this(file, file.Length) { }
 
 	public Mpeg4File(string fileName, FileAccess access = FileAccess.Read, FileShare share = FileShare.Read)
-		: this(File.Open(fileName, FileMode.Open, access, share)) { }
+		: this(File.Open(fileName, FileMode.Open, access, share), disposeOnFailure: true) { }
 
-	public Mpeg4File(Stream file, long fileSize)
+	private Mpeg4File(Stream file, bool disposeOnFailure)
+		: this(file, file.Length, disposeOnFailure) { }
+
+	public Mpeg4File(Stream file, long fileSize) : this(file, fileSize, disposeOnFailure: false) { }
+
+	protected Mpeg4File(Stream file, long fileSize, bool disposeOnFailure)
 	{
+		disposeInputOnFailure = disposeOnFailure;
 		InputStream = file.CanSeek ? file : new TrackedReadStream(file, fileSize);
 
-		TopLevelBoxes = Mpeg4Util.LoadTopLevelBoxes(InputStream);
-		Ftyp = TopLevelBoxes.OfType<FtypBox>().Single();
-		Moov = TopLevelBoxes.OfType<MoovBox>().Single();
-		Mdat = TopLevelBoxes.OfType<MdatBox>().Single();
+		try
+		{
+			TopLevelBoxes = Mpeg4Util.LoadTopLevelBoxes(InputStream);
+			Ftyp = TopLevelBoxes.OfType<FtypBox>().Single();
+			Moov = TopLevelBoxes.OfType<MoovBox>().Single();
+			Mdat = TopLevelBoxes.OfType<MdatBox>().Single();
 
-		lazyMetadataItems = new Lazy<MetadataItems>(() => new MetadataItems(Moov.ILst ?? Moov.CreateEmptyMetadata()));
-		AudioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
-			?? throw new InvalidOperationException("The audio track's AudioSampleEntry is null");
+			lazyMetadataItems = new Lazy<MetadataItems>(() => new MetadataItems(Moov.ILst ?? Moov.CreateEmptyMetadata()));
+			AudioSampleEntry = Moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry
+				?? throw new InvalidOperationException("The audio track's AudioSampleEntry is null");
+		}
+		catch
+		{
+			DisposeFailedConstruction();
+			throw;
+		}
 	}
 
 	private int? m_timescale = null;
@@ -299,6 +314,21 @@ public class Mpeg4File : IDisposable
 		Chapters ??= chapterInfo;
 
 		return chapterInfo;
+	}
+
+	// Filename constructors create the stream themselves. On failed construction
+	// there is no returned object for the caller to dispose. Caller-supplied streams
+	// deliberately retain their existing ownership behavior on failure.
+	protected void DisposeFailedConstruction()
+	{
+		if (!disposeInputOnFailure || Interlocked.Exchange(ref m_Disposed, 1) != 0)
+			return;
+		// Preserve the parsing/admission exception even if best-effort cleanup fails.
+		try { InputStream.Dispose(); } catch { }
+		if (TopLevelBoxes is not null)
+			foreach (var box in TopLevelBoxes)
+				try { box.Dispose(); } catch { }
+		GC.SuppressFinalize(this);
 	}
 
 	~Mpeg4File()
