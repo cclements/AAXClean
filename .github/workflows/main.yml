@@ -13,6 +13,7 @@ jobs:
   build:
     uses: ./.github/workflows/build.yml
     with:
+      publish: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
       project_file: ./src/AAXClean/AAXClean.csproj
       nuspec_file: ./AAXClean.nuspec
     secrets:
