@@ -68,8 +68,11 @@ internal class ChunkReader : IChunkReader
 
 		if (track.Mdia.Hdlr.HandlerType == "soun" && requestedStart > 0)
 		{
+			if (track.Mdia.Minf.Stbl.Stsd.AudioSampleEntry?.Esds?
+				.ES_Descriptor.DecoderConfig.AudioSpecificConfig is { AudioObjectType: 2 } asc)
+				start = FindAacPrerollStart(track, requestedStart, asc.SamplingFrequency);
 			if (track.Mdia.Minf.Stbl.Stss is not null)
-				start = FindPrecedingSyncSampleStart(track, requestedStart);
+				start = FindPrecedingSyncSampleStart(track, start);
 			else if (TrackIsUsac(track))
 				//Without stss, only the decrypted USAC access units reveal their real
 				//independence frames. No maximum interval is guaranteed, so dispatch from
@@ -83,6 +86,31 @@ internal class ChunkReader : IChunkReader
 
 		var trackEntry = new TrackEntry(track.Tkhd.TrackID, timescale, filter, track, start, end);
 		TrackEntries.Add(track.Tkhd.TrackID, trackEntry);
+	}
+
+	private static long FindAacPrerollStart(TrakBox track, long requestedStart, int sampleRate)
+	{
+		long position = 0, previousFrame = 0;
+		foreach (SttsBox.SampleEntry entry in track.Mdia.Minf.Stbl.Stts.Samples)
+		{
+			if (entry.FrameCount == 0) continue;
+			if (entry.FrameDelta == 0) throw new InvalidDataException("AAC sample duration must be positive.");
+			long end = checked(position + (long)entry.FrameCount * entry.FrameDelta);
+			if (requestedStart < end)
+			{
+				long index = (requestedStart - position) / entry.FrameDelta;
+				return index == 0 ? previousFrame : checked(position + (index - 1) * entry.FrameDelta);
+			}
+			previousFrame = end - entry.FrameDelta;
+			position = end;
+		}
+		if (position > 0) return previousFrame;
+
+		// Fragmented AAC has no flat stts entries. Select enough earlier media
+		// time for one 1024-sample AAC-LC access unit (also covers 960-sample LC).
+		if (sampleRate <= 0) throw new InvalidDataException("AAC sample rate must be positive.");
+		long preroll = checked(((long)track.Mdia.Mdhd.Timescale * 1024 + sampleRate - 1) / sampleRate);
+		return Math.Max(0, requestedStart - preroll);
 	}
 
 	private static bool TrackIsUsac(TrakBox track)

@@ -135,10 +135,8 @@ public class DashPresentationDurationTests
 		}
 	}
 
-	private static byte[] CreateTwoSegmentDash()
+	internal static byte[] CreateTwoSegmentDash(uint timescale = 1000, uint frameDuration = 1000)
 	{
-		const uint timescale = 1000;
-		const uint frameDuration = 1000;
 
 		byte[] Fragment(uint sequence, uint decodeTime, byte[] payload)
 		{
@@ -150,21 +148,21 @@ public class DashPresentationDurationTests
 		}
 
 		byte[] first = Fragment(1, 0, [0x81, 0, 2, 0, 3, 0]);
-		byte[] secondSap = Fragment(2, 3000, [0x85, 0]);
-		byte[] secondTail = Fragment(3, 4000, [6, 0, 7, 0]);
+		byte[] secondSap = Fragment(2, 3 * frameDuration, [0x85, 0]);
+		byte[] secondTail = Fragment(3, 4 * frameDuration, [6, 0, 7, 0]);
 		byte[] ftyp = Box("ftyp", Encoding.ASCII.GetBytes("iso6"), UInt32s(0), Encoding.ASCII.GetBytes("dash"));
 		byte[] sidx = Box("sidx",
 			UInt32s(0, 1, timescale, 0, 0),
 			UInt16s(0, 2),
 			UInt32s(
-				checked((uint)first.Length), 3000, 0x9000_0000,
-				checked((uint)(secondSap.Length + secondTail.Length)), 3000, 0x9000_0000));
+				checked((uint)first.Length), 3 * frameDuration, 0x9000_0000,
+				checked((uint)(secondSap.Length + secondTail.Length)), 3 * frameDuration, 0x9000_0000));
 
 		byte[] mvhd = Box("mvhd",
 			UInt32s(0, 0, 0, timescale, 0, 0x0001_0000),
 			UInt16s(0x0100, 0), new byte[8], new byte[36], new byte[24], UInt32s(2));
 		byte[] mvex = Box("mvex",
-			Box("mehd", UInt32s(0, 6000)),
+			Box("mehd", UInt32s(0, 6 * frameDuration)),
 			Box("trex", UInt32s(0, 1, 1, frameDuration, 2, 0)));
 		byte[] tkhd = Box("tkhd",
 			UInt32s(0, 0, 0, 1, 0, 0), new byte[8],

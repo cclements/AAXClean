@@ -30,6 +30,8 @@ namespace AAXClean.FrameFilters.Audio
 		//source metadata and AacValidateFilter corrects it from the USAC bitstream, so the
 		//unknown fragment metadata cannot establish an independent entry point.
 		protected override bool StartPartAtSyncFrame => true;
+		protected override bool PreserveSyncPreroll => moov.AudioTrack.Mdia.Minf.Stbl.Stsd.AudioSampleEntry?
+			.Esds?.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 2;
 		protected override bool IsSyncFrame(FrameEntry frame) => frame.IsSyncSample == true;
 
 		protected override void OnPartOpened(long editMediaTime, long presentedSamples)

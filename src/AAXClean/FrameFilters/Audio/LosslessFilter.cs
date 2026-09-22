@@ -16,6 +16,7 @@ namespace AAXClean.FrameFilters.Audio
 		private readonly long windowStart;
 		private readonly long windowEnd;
 		private readonly bool trimming;
+		private readonly bool preserveSyncPreroll;
 		private readonly SyncPrerollQueue preroll = new();
 		private bool insideWindow;
 		private long currentSample;
@@ -28,6 +29,8 @@ namespace AAXClean.FrameFilters.Audio
 		{
 			Mp4aWriter = new Mp4aWriter(outputStream, mp4Audio.Ftyp, mp4Audio.Moov);
 			ChapterQueue = chapterQueue;
+			preserveSyncPreroll = mp4Audio.AudioSampleEntry.Esds?
+				.ES_Descriptor.DecoderConfig.AudioSpecificConfig.AudioObjectType == 2;
 
 			long mediaDuration = checked((long)mp4Audio.Moov.AudioTrack.Mdia.Mdhd.Duration);
 			long availableMediaEnd = Math.Max(
@@ -63,14 +66,15 @@ namespace AAXClean.FrameFilters.Audio
 			{
 				if (input.Chunk is not null && currentSample + input.SamplesInFrame <= windowStart)
 				{
-					preroll.Push(input, currentSample, input.IsSyncSample == true);
+					preroll.Push(input, currentSample, input.IsSyncSample == true, preserveSyncPreroll);
 					currentSample += input.SamplesInFrame;
 					return Task.CompletedTask;
 				}
 
 				//A corrected bitstream sync on the overlapping frame supersedes any
-				//older metadata-derived preroll and is the nearest valid entry point.
-				bool currentIsEntry = input.IsSyncSample == true && currentSample <= windowStart;
+				//older metadata-derived preroll, except AAC-LC still needs decoder overlap.
+				bool currentIsEntry = input.IsSyncSample == true && currentSample <= windowStart
+					&& (!preserveSyncPreroll || currentSample == 0);
 				if (!currentIsEntry && !preroll.HasSyncFrame)
 					throw new InvalidDataException("The trim has no confirmed preceding sync frame for a standalone output.");
 				insideWindow = true;

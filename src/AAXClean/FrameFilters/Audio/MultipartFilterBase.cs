@@ -34,6 +34,9 @@ namespace AAXClean.FrameFilters.Audio
 		/// </summary>
 		protected virtual bool StartPartAtSyncFrame => false;
 
+		/// <summary>Retain decoder overlap state before an otherwise independent frame.</summary>
+		protected virtual bool PreserveSyncPreroll => false;
+
 		/// <summary>Whether this frame is a valid decode entry point. Default: all frames are.</summary>
 		protected virtual bool IsSyncFrame(TInput frame) => frame.IsSyncSample ?? true;
 
@@ -199,9 +202,11 @@ namespace AAXClean.FrameFilters.Audio
 					//point. A current sync frame supersedes the older run only when it
 					//starts at or before the boundary. If it starts after an unaligned
 					//boundary, the queued run still contains presentation samples that
-					//must survive behind the output edit.
+					//must survive behind the output edit. AAC-LC additionally retains a
+					//prior sync run to warm its overlap state before the presented window.
 					var partFrames = new List<(TInput frame, long start)>();
-					if (StartPartAtSyncFrame && (!inputIsSync || currentSample > startSample))
+					if (StartPartAtSyncFrame && (!inputIsSync || currentSample > startSample
+						|| (PreserveSyncPreroll && currentSample > 0)))
 					{
 						if (!prerollQueue.HasSyncFrame)
 							throw new InvalidDataException("The chapter has no confirmed preceding sync frame for a standalone output.");
@@ -238,7 +243,7 @@ namespace AAXClean.FrameFilters.Audio
 				WriteFrameToFile(input, newChunk);
 			}
 
-			prerollQueue.Push(input, currentSample, inputIsSync);
+			prerollQueue.Push(input, currentSample, inputIsSync, PreserveSyncPreroll);
 
 			currentSample += input.SamplesInFrame;
 		}
