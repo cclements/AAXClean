@@ -197,7 +197,8 @@ internal class ChunkReader : IChunkReader
 
 		if (processingFailure is not null)
 		{
-			if (cleanupFailure is not null and not OperationCanceledException)
+			if (cleanupFailure is not null and not OperationCanceledException
+				&& !ReferenceEquals(cleanupFailure, processingFailure.SourceException))
 			{
 				throw new AggregateException(
 					"Audio processing and filter cleanup both failed.",

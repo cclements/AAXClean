@@ -45,6 +45,20 @@ public class ChunkReaderFailureTests
 		Assert.AreSame(cleanupFailure, exception.InnerExceptions[1]);
 	}
 
+	[TestMethod]
+	public async Task SameProcessingAndCleanupFailure_IsReportedOnlyOnce()
+	{
+		var failure = new InvalidDataException("one failure observed by producer and completion");
+		using var track = MakeTrack(trackId: 7, timescale: 1_000);
+		using var input = new MemoryStream([0]);
+		using var cancellationSource = new CancellationTokenSource();
+		using var filter = new CleanupFailingFilter(failure);
+		var reader = new FailingChunkReader(input, track.Tkhd.TrackID, failure);
+		reader.AddTrack(track, filter);
+		var observed = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => reader.RunAsync(cancellationSource));
+		Assert.AreSame(failure, observed);
+	}
+
 	private static TrakBox MakeTrack(uint trackId, uint timescale)
 	{
 		byte[] tkhd = MakeBox(

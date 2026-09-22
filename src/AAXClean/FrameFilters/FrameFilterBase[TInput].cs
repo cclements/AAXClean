@@ -12,6 +12,7 @@ namespace AAXClean.FrameFilters
 
 		private CancellationToken CancellationToken;
 		private Task? filterLoop;
+		private Task? completion;
 		private TInput[] buffer;
 		private int bufferPosition = 0;
 		private readonly Channel<BufferEntry> filterChannel;
@@ -28,6 +29,15 @@ namespace AAXClean.FrameFilters
 
 		public virtual async Task AddInputAsync(TInput input)
 		{
+			// A failed producer may be called again by cleanup or a buffered upstream
+			// filter. Observe the worker before touching a possibly full input buffer.
+			if (completion is not null)
+			{
+				await completion;
+				throw new InvalidOperationException("The filter has already completed.");
+			}
+			if (filterLoop?.IsCompleted is true)
+				await filterLoop;
 			filterLoop ??= Task.Run(Encoder, CancellationToken);
 
 			if (CancellationToken.IsCancellationRequested)
@@ -37,11 +47,18 @@ namespace AAXClean.FrameFilters
 
 			if (bufferPosition == InputBufferSize)
 			{
-				if (await filterChannel.Writer.WaitToWriteAsync(CancellationToken))
+				try
 				{
 					await filterChannel.Writer.WriteAsync(new BufferEntry(bufferPosition, buffer), CancellationToken);
 					bufferPosition = 0;
 					buffer = new TInput[InputBufferSize];
+				}
+				catch (ChannelClosedException)
+				{
+					// The channel is transport; retain the worker's actual exception and
+					// ensure it has stopped before the caller begins resource cleanup.
+					await filterLoop;
+					throw;
 				}
 			}
 		}
@@ -74,16 +91,18 @@ namespace AAXClean.FrameFilters
 		{
 			try
 			{
-				await filterChannel.Writer.WriteAsync(new BufferEntry(bufferPosition, buffer), CancellationToken);
-				filterChannel.Writer.Complete();
+				if (bufferPosition > 0)
+					await filterChannel.Writer.WriteAsync(new BufferEntry(bufferPosition, buffer), CancellationToken);
 			}
 			catch (OperationCanceledException) { }
+			catch (ChannelClosedException) { } // The worker below owns the failure.
+			finally { filterChannel.Writer.TryComplete(); }
 
 			if (filterLoop is not null)
 				await filterLoop;
 		}
 
-		public Task CompleteAsync() => CompleteInternalAsync();
+		public Task CompleteAsync() => completion ??= CompleteInternalAsync();
 
 		#region IDisposable
 		protected bool Disposed { get; private set; }

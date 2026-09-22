@@ -1,4 +1,6 @@
-﻿using System.Threading;
+﻿using System;
+using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AAXClean.FrameFilters
@@ -38,8 +40,24 @@ namespace AAXClean.FrameFilters
 
 		protected sealed override async Task CompleteInternalAsync()
 		{
-			await base.CompleteInternalAsync();
-			await (Linked?.CompleteAsync() ?? Task.CompletedTask);
+			ExceptionDispatchInfo? failure = null;
+			try { await base.CompleteInternalAsync(); }
+			catch (Exception ex) { failure = ExceptionDispatchInfo.Capture(ex); }
+
+			// A failed transform can leave its downstream worker running with queued
+			// input. Always join the entire chain before its resources are disposed.
+			try { await (Linked?.CompleteAsync() ?? Task.CompletedTask); }
+			catch (Exception ex) when (failure is not null)
+			{
+				if (!ReferenceEquals(ex, failure.SourceException) && ex is not OperationCanceledException)
+				{
+					if (failure.SourceException is OperationCanceledException)
+						throw;
+					throw new AggregateException("Audio filtering and linked completion both failed.",
+						failure.SourceException, ex);
+				}
+			}
+			failure?.Throw();
 		}
 
 		protected override void Dispose(bool disposing)
