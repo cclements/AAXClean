@@ -62,7 +62,10 @@ namespace AAXClean.FrameFilters
 			}
 			catch (Exception ex)
 			{
-				filterChannel.Writer.Complete(ex);
+				// Completion may already have closed input before this filter or its
+				// flush fails. Preserve the real failure instead of throwing a second
+				// ChannelClosedException while trying to notify producers.
+				filterChannel.Writer.TryComplete(ex);
 				throw;
 			}
 		}

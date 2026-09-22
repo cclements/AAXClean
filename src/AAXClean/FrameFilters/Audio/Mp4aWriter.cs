@@ -198,7 +198,9 @@ namespace AAXClean.FrameFilters.Audio
 			//When every sample is sync (e.g. AAC-LC from a fragmented source whose sample flags
 			//mark all frames independent), the box is omitted: an absent stss already means
 			//"all samples are sync" per ISO/IEC 14496-12, and a full enumeration is pure bloat.
-			if (SyncSamples.Count > 0 && SyncSamples.Count < AudioSampleSizes.Count)
+			// An empty table is required when none of the samples has a confirmed
+			// entry point. Omitting it would assert that every sample is independent.
+			if (SyncSamples.Count < AudioSampleSizes.Count)
 				StssBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl).SampleNumbers.AddRange(SyncSamples);
 
 			IStszBox stsz = StszBox.CreateBlank(Moov.AudioTrack.Mdia.Minf.Stbl, AudioSampleSizes);
@@ -403,9 +405,11 @@ namespace AAXClean.FrameFilters.Audio
 			}
 		}
 
+		/// <summary>Add an independently decodable frame (the legacy overload's contract).</summary>
 		public void AddFrame(Span<byte> frame, bool newChunk, uint frameDelta)
-			=> AddFrame(frame, newChunk, frameDelta, sourceIsSync: null);
+			=> AddFrame(frame, newChunk, frameDelta, sourceIsSync: true);
 
+		/// <summary>Add a frame with source sync evidence; unknown frames are not advertised as entry points.</summary>
 		public void AddFrame(Span<byte> frame, bool newChunk, uint frameDelta, bool? sourceIsSync)
 		{
 			lock (lockObj)

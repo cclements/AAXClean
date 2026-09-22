@@ -30,7 +30,8 @@ public class ChunkEntryList : IReadOnlyCollection<ChunkEntry>
 		Stts = track.Mdia.Minf.Stbl.Stts;
 		ChunkFrameTable = track.Mdia.Minf.Stbl.Stsc.CalculateChunkFrameTable(coBox.EntryCount);
 		//A present stss identifies the track's sync samples; absent means every sample is sync
-		//(ISO/IEC 14496-12), which callers see as SyncFlags = null (no explicit information).
+		//(ISO/IEC 14496-12). Keep that positive container evidence distinct from
+		//the unknown flags of a fragment with no usable sync information.
 		SyncSampleNumbers = track.Mdia.Minf.Stbl.Stss?.SampleNumbers.ToHashSet();
 	}
 
@@ -51,13 +52,10 @@ public class ChunkEntryList : IReadOnlyCollection<ChunkEntry>
 
 			var frameDurations = Stts.EnumerateFrameDeltas(chunkFrames.FirstFrameIndex).Take(frameSizes.Length).ToArray();
 
-			bool[]? syncFlags = null;
-			if (SyncSampleNumbers is not null)
-			{
-				syncFlags = new bool[frameSizes.Length];
-				for (int i = 0; i < syncFlags.Length; i++)
-					syncFlags[i] = SyncSampleNumbers.Contains((uint)(chunkFrames.FirstFrameIndex + i + 1));
-			}
+			bool[] syncFlags = new bool[frameSizes.Length];
+			for (int i = 0; i < syncFlags.Length; i++)
+				syncFlags[i] = SyncSampleNumbers is null ||
+					SyncSampleNumbers.Contains((uint)(chunkFrames.FirstFrameIndex + i + 1));
 
 			var entry = new ChunkEntry
 			{

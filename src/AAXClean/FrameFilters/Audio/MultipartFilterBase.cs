@@ -1,6 +1,7 @@
 ﻿using Mpeg4Lib;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 
 namespace AAXClean.FrameFilters.Audio
@@ -192,9 +193,6 @@ namespace AAXClean.FrameFilters.Audio
 			{
 				if (currentSample + input.SamplesInFrame > startSample)
 				{
-					CreateNewWriter(TCallback.Create(splitChapters.Current));
-					writerOpen = true;
-
 					//The preroll queue holds the frames since (and including) the most
 					//recent sync frame, all of which start at or before the chapter
 					//boundary. Starting the part there gives decoders a valid entry
@@ -204,9 +202,17 @@ namespace AAXClean.FrameFilters.Audio
 					//must survive behind the output edit.
 					var partFrames = new List<(TInput frame, long start)>();
 					if (StartPartAtSyncFrame && (!inputIsSync || currentSample > startSample))
+					{
+						if (!prerollQueue.HasSyncFrame)
+							throw new InvalidDataException("The chapter has no confirmed preceding sync frame for a standalone output.");
 						foreach ((FrameEntry frame, long start) in prerollQueue.Frames)
 							partFrames.Add(((TInput)frame, start));
+					}
 					partFrames.Add((input, currentSample));
+					// Validate the entry point before invoking the callback that creates
+					// a new output file or publishes its lifecycle notification.
+					CreateNewWriter(TCallback.Create(splitChapters.Current));
+					writerOpen = true;
 
 					OnPartOpened(editMediaTime: Math.Max(0, startSample - partFrames[0].start),
 						presentedSamples: endSample - startSample);

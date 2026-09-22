@@ -12,11 +12,15 @@ namespace AAXClean.FrameFilters.Audio
 		private readonly Queue<(FrameEntry frame, long start)> queue = new();
 
 		public IReadOnlyCollection<(FrameEntry frame, long start)> Frames => queue;
+		public bool HasSyncFrame { get; private set; }
 
 		public void Push(FrameEntry frame, long startSample, bool isSync)
 		{
 			if (isSync)
+			{
 				queue.Clear();
+				HasSyncFrame = true;
+			}
 			queue.Enqueue((frame, startSample));
 		}
 	}

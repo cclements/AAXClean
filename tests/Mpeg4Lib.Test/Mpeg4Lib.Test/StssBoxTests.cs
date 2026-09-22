@@ -127,14 +127,14 @@ public class StssBoxTests
 	}
 
 	[TestMethod]
-	public void ChunkEntryList_NoStss_SyncFlagsAreNull()
+	public void ChunkEntryList_NoStss_ExplicitlyMarksAllFramesIndependent()
 	{
 		var trak = MakeTrak(stss: null);
 
 		var chunks = new ChunkEntryList(trak).ToList();
 
 		Assert.HasCount(2, chunks);
-		Assert.IsNull(chunks[0].SyncFlags);
-		Assert.IsNull(chunks[1].SyncFlags);
+		CollectionAssert.AreEqual(new[] { true, true, true }, chunks[0].SyncFlags);
+		CollectionAssert.AreEqual(new[] { true, true }, chunks[1].SyncFlags);
 	}
 }
