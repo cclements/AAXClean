@@ -112,6 +112,10 @@ namespace AAXClean.FrameFilters.Audio
 			Debug.Assert(timeScale <= ushort.MaxValue);
 			AudioSampleEntry.SampleRate = (ushort)timeScale;
 			Moov.AudioTrack.Mdia.Mdhd.Timescale = timeScale;
+			// A newly encoded sample must be exactly representable in movie time.
+			// Retaining the source's coarser clock rounds edit-list durations and can
+			// add or remove output samples. Close rewrites the owned track durations.
+			Moov.Mvhd.Timescale = timeScale;
 			if (Moov.TextTrack is not null)
 			{
 				Moov.TextTrack.Mdia.Mdhd.Timescale = Moov.AudioTrack.Mdia.Mdhd.Timescale;
